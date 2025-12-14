@@ -295,6 +295,20 @@ export const GraphConfigurationMetadata: {
       | { type: "hidden" };
   };
 } = {
+  modelProvider: {
+    x_open_swe_ui_config: {
+      type: "select",
+      default: "",
+      description:
+        "Select a provider to automatically use its configured models for all tasks (Planner, Programmer, Reviewer, Router, Summarizer). Leave empty to use individual model settings.",
+      options: [
+        { value: "", label: "Use Individual Settings" },
+        { value: "anthropic", label: "Anthropic (Claude)" },
+        { value: "openai", label: "OpenAI" },
+        { value: "google-genai", label: "Google GenAI (Gemini)" },
+      ],
+    },
+  },
   maxContextActions: {
     x_open_swe_ui_config: {
       type: "number",
@@ -515,6 +529,14 @@ export const GraphConfiguration = z.object({
    */
   run_id: withLangGraph(z.string().optional(), {
     metadata: GraphConfigurationMetadata.run_id,
+  }),
+  /**
+   * Model provider to use. When set, automatically uses the configured models for this provider
+   * for all tasks (Planner, Programmer, Reviewer, Router, Summarizer).
+   * @default ""
+   */
+  modelProvider: withLangGraph(z.string().optional(), {
+    metadata: GraphConfigurationMetadata.modelProvider,
   }),
   /**
    * The maximum number of context gathering actions to take during planning.

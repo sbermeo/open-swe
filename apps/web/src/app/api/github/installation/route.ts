@@ -5,6 +5,7 @@ import {
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { GITHUB_TOKEN_COOKIE } from "@openswe/shared/constants";
+import { createAppUrl, getBaseUrl } from "@/lib/url";
 
 /**
  * Initiates the GitHub App installation flow
@@ -43,7 +44,9 @@ export async function GET(request: NextRequest) {
     // Create a response that will redirect to the GitHub App installation page
     // Include the callback URL as a parameter to ensure GitHub redirects back to our app
     // Add the state as a custom parameter in the callback URL
-    const baseCallbackUrl = `${request.nextUrl.origin}/api/github/installation-callback`;
+    // Use the base URL helper to ensure we use the correct IP instead of 0.0.0.0
+    const baseUrl = getBaseUrl();
+    const baseCallbackUrl = `${baseUrl}/api/github/installation-callback`;
     const callbackUrl = `${baseCallbackUrl}?custom_state=${encodeURIComponent(state)}`;
     const response = NextResponse.redirect(
       `https://github.com/apps/${githubAppName}/installations/new?redirect_uri=${encodeURIComponent(callbackUrl)}`,
@@ -65,11 +68,16 @@ export async function GET(request: NextRequest) {
       cookieOptions,
     );
 
-    // Store the current URL as the return_to URL so we can redirect back after installation
-    const returnTo = request.headers.get("referer") || "/";
+    // Store the current path as the return_to URL so we can redirect back after installation
+    // Extract just the path from the referer, then use createAppUrl to ensure correct base URL
+    const referer = request.headers.get("referer");
+    const returnToPath = referer
+      ? new URL(referer).pathname
+      : request.nextUrl.pathname || "/";
+    // Store just the path, we'll reconstruct the full URL in the callback handler
     response.cookies.set(
       GITHUB_INSTALLATION_RETURN_TO_COOKIE,
-      returnTo,
+      returnToPath,
       cookieOptions,
     );
 

@@ -48,6 +48,31 @@ function extractConfigurationsFromSchema(
   return configurations;
 }
 
+// Model mappings for each provider (matches backend ModelManager configuration)
+const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
+  anthropic: {
+    plannerModelName: "anthropic:claude-opus-4-5",
+    programmerModelName: "anthropic:claude-opus-4-5",
+    reviewerModelName: "anthropic:claude-opus-4-5",
+    routerModelName: "anthropic:claude-haiku-4-5-latest",
+    summarizerModelName: "anthropic:claude-opus-4-5",
+  },
+  "google-genai": {
+    plannerModelName: "google-genai:models/gemini-3-pro-preview",
+    programmerModelName: "google-genai:models/gemini-3-pro-preview",
+    reviewerModelName: "google-genai:models/gemini-2.5-flash",
+    routerModelName: "google-genai:models/gemini-2.5-flash",
+    summarizerModelName: "google-genai:models/gemini-3-pro-preview",
+  },
+  openai: {
+    plannerModelName: "openai:gpt-5-codex",
+    programmerModelName: "openai:gpt-5-codex",
+    reviewerModelName: "openai:gpt-5-codex",
+    routerModelName: "openai:gpt-5-nano",
+    summarizerModelName: "openai:gpt-5-mini",
+  },
+};
+
 export function ConfigManager() {
   const { configs, updateConfig, getConfig } = useConfigStore();
   const [defaultConfig, setDefaultConfig] = useState<
@@ -145,7 +170,12 @@ export function ConfigManager() {
               <Skeleton className="h-16 w-full" />
             </div>
           ) : configurations.length > 0 ? (
-            configurations.map(
+            // Sort configurations to show modelProvider first
+            [...configurations].sort((a, b) => {
+              if (a.label === "modelProvider") return -1;
+              if (b.label === "modelProvider") return 1;
+              return 0;
+            }).map(
               (config: ConfigurableFieldUIMetadata, index: number) => (
                 <div
                   key={`${config.label}-${index}`}
@@ -182,6 +212,16 @@ export function ConfigManager() {
                   </div>
 
                   <div className="space-y-3">
+                    {config.label === "modelProvider" && configs[DEFAULT_CONFIG_KEY]?.["modelProvider"] && (
+                      <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
+                        <CircleAlert className="h-4 w-4" />
+                        <AlertDescription>
+                          <p>
+                            <strong>Provider Selected:</strong> All model settings (Planner, Programmer, Reviewer, Router, Summarizer) have been automatically updated to use the models configured for this provider. You can still override individual model settings if needed.
+                          </p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
                     {config.label === "mcpServers" && (
                       <Alert className="border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
                         <CircleAlert className="h-4 w-4" />
@@ -218,8 +258,22 @@ export function ConfigManager() {
                           : config.default
                       }
                       setValue={(value) => {
-                        // Only store in config when user actually changes a value
-                        updateConfig(DEFAULT_CONFIG_KEY, config.label, value);
+                        // If modelProvider is being changed, update all model fields
+                        if (config.label === "modelProvider" && typeof value === "string") {
+                          // Store the provider selection
+                          updateConfig(DEFAULT_CONFIG_KEY, config.label, value);
+                          
+                          // If a provider is selected, update all model fields
+                          if (value && value !== "" && PROVIDER_MODEL_MAPPINGS[value]) {
+                            const modelMappings = PROVIDER_MODEL_MAPPINGS[value];
+                            Object.entries(modelMappings).forEach(([modelField, modelValue]) => {
+                              updateConfig(DEFAULT_CONFIG_KEY, modelField, modelValue);
+                            });
+                          }
+                        } else {
+                          // Only store in config when user actually changes a value
+                          updateConfig(DEFAULT_CONFIG_KEY, config.label, value);
+                        }
                       }}
                     />
                   </div>

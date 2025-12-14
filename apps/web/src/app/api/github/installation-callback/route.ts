@@ -5,6 +5,7 @@ import {
   getInstallationCookieOptions,
 } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { createAppUrl } from "@/lib/url";
 
 /**
  * Handles callbacks from GitHub App installations
@@ -15,9 +16,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const installationId = searchParams.get("installation_id");
 
-    // Get the return URL from cookies
-    const returnTo =
+    // Get the return URL from cookies, but ensure it uses the correct base URL
+    const returnToPath =
       request.cookies.get(GITHUB_INSTALLATION_RETURN_TO_COOKIE)?.value || "/";
+    // Normalize the return URL to use our base URL instead of potentially 0.0.0.0
+    const returnTo = returnToPath.startsWith("http")
+      ? returnToPath.replace(/^https?:\/\/[^\/]+/, createAppUrl(""))
+      : createAppUrl(returnToPath);
 
     // Verify state parameter to prevent CSRF attacks
     // GitHub App installation doesn't return the state directly, but we included it in our callback URL
@@ -65,7 +70,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("GitHub App installation callback error:", error);
     return NextResponse.redirect(
-      new URL("/?error=installation_callback_failed", request.url),
+      createAppUrl("/?error=installation_callback_failed"),
     );
   }
 }

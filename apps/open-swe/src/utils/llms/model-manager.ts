@@ -105,6 +105,8 @@ export class ModelManager {
    */
   async loadModel(graphConfig: GraphConfig, task: LLMTask) {
     const baseConfig = this.getBaseConfigForTask(graphConfig, task);
+    const fullModelName = `${baseConfig.provider}:${baseConfig.modelName}`;
+    logger.info(`[${task.toUpperCase()}] Loading model: ${fullModelName}`);
     const model = await this.initializeModel(baseConfig, graphConfig);
     return model;
   }
@@ -131,12 +133,26 @@ export class ModelManager {
       return null;
     }
 
+    // First, try to get API key from environment variables
+    const envApiKeyMap: Record<Provider, string> = {
+      "openai": process.env.OPENAI_API_KEY || "",
+      "anthropic": process.env.ANTHROPIC_API_KEY || "",
+      "google-genai": process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "",
+    };
+
+    const envApiKey = envApiKeyMap[provider];
+    if (envApiKey && envApiKey.trim() !== "") {
+      logger.debug(`Using API key from environment variable for ${provider}`);
+      return envApiKey;
+    }
+
+    // Fallback to API keys from config (frontend settings)
     const apiKeys = graphConfig.configurable?.apiKeys;
     if (!apiKeys) {
       throw new Error(API_KEY_REQUIRED_MESSAGE);
     }
 
-    const missingProviderKeyMessage = `No API key found for provider: ${provider}. Please add one in the settings page.`;
+    const missingProviderKeyMessage = `No API key found for provider: ${provider}. Please add one in the settings page or set the environment variable (${provider === "openai" ? "OPENAI_API_KEY" : provider === "anthropic" ? "ANTHROPIC_API_KEY" : "GOOGLE_API_KEY"}).`;
 
     const providerApiKey = providerToApiKey(provider, apiKeys);
     if (!providerApiKey) {
@@ -184,24 +200,22 @@ export class ModelManager {
       ...(apiKey ? { apiKey } : {}),
       ...(thinkingModel && provider === "anthropic"
         ? {
-            thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
-            maxTokens: thinkingMaxTokens,
-          }
+          thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
+          maxTokens: thinkingMaxTokens,
+        }
         : modelName.includes("gpt-5")
           ? {
-              max_completion_tokens: finalMaxTokens,
-              temperature: 1,
-            }
+            max_completion_tokens: finalMaxTokens,
+            temperature: 1,
+          }
           : {
-              maxTokens: finalMaxTokens,
-              temperature: thinkingModel ? undefined : temperature,
-            }),
+            maxTokens: finalMaxTokens,
+            temperature: thinkingModel ? undefined : temperature,
+          }),
     };
 
-    logger.debug("Initializing model", {
-      provider,
-      modelName,
-    });
+    const fullModelName = `${provider}:${modelName}`;
+    logger.info(`Initializing model: ${fullModelName} (provider: ${provider}, task config)`);
 
     return await initChatModel(modelName, modelOptions);
   }
@@ -213,6 +227,9 @@ export class ModelManager {
   ) {
     const configs: ModelLoadConfig[] = [];
     const baseConfig = this.getBaseConfigForTask(config, task);
+
+    // Check if a provider is selected - if so, only use that provider's models
+    const selectedProvider = (config.configurable as any)?.modelProvider as Provider | undefined;
 
     const defaultConfig = selectedModel._defaultConfig;
     let selectedModelConfig: ModelLoadConfig | null = null;
@@ -228,20 +245,20 @@ export class ModelManager {
           modelName,
           ...(modelName.includes("gpt-5")
             ? {
-                max_completion_tokens:
-                  defaultConfig.maxTokens ?? baseConfig.maxTokens,
-                temperature: 1,
-              }
+              max_completion_tokens:
+                defaultConfig.maxTokens ?? baseConfig.maxTokens,
+              temperature: 1,
+            }
             : {
-                maxTokens: defaultConfig.maxTokens ?? baseConfig.maxTokens,
-                temperature:
-                  defaultConfig.temperature ?? baseConfig.temperature,
-              }),
+              maxTokens: defaultConfig.maxTokens ?? baseConfig.maxTokens,
+              temperature:
+                defaultConfig.temperature ?? baseConfig.temperature,
+            }),
           ...(isThinkingModel
             ? {
-                thinkingModel: true,
-                thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
-              }
+              thinkingModel: true,
+              thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
+            }
             : {}),
         };
         configs.push(selectedModelConfig);
@@ -249,12 +266,19 @@ export class ModelManager {
     }
 
     // Add fallback models
-    for (const provider of this.config.fallbackOrder) {
+    // If a provider is selected, only use fallbacks from that provider
+    // Otherwise, use the default fallback order
+    const fallbackProviders = selectedProvider 
+      ? [selectedProvider] 
+      : this.config.fallbackOrder;
+
+    for (const provider of fallbackProviders) {
       const fallbackModel = this.getDefaultModelForProvider(provider, task);
       if (
         fallbackModel &&
         (!selectedModelConfig ||
-          fallbackModel.modelName !== selectedModelConfig.modelName)
+          fallbackModel.modelName !== selectedModelConfig.modelName ||
+          fallbackModel.provider !== selectedModelConfig.provider)
       ) {
         // Check if fallback model is a thinking model
         const isThinkingModel =
@@ -265,20 +289,20 @@ export class ModelManager {
           ...fallbackModel,
           ...(fallbackModel.modelName.includes("gpt-5")
             ? {
-                max_completion_tokens: baseConfig.maxTokens,
-                temperature: 1,
-              }
+              max_completion_tokens: baseConfig.maxTokens,
+              temperature: 1,
+            }
             : {
-                maxTokens: baseConfig.maxTokens,
-                temperature: isThinkingModel
-                  ? undefined
-                  : baseConfig.temperature,
-              }),
+              maxTokens: baseConfig.maxTokens,
+              temperature: isThinkingModel
+                ? undefined
+                : baseConfig.temperature,
+            }),
           ...(isThinkingModel
             ? {
-                thinkingModel: true,
-                thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
-              }
+              thinkingModel: true,
+              thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
+            }
             : {}),
         };
         configs.push(fallbackConfig);
@@ -290,10 +314,36 @@ export class ModelManager {
 
   /**
    * Get the model name for a task from GraphConfig
+   * Returns full model identifier with provider (e.g., "anthropic:claude-opus-4-5")
    */
   public getModelNameForTask(config: GraphConfig, task: LLMTask): string {
-    const baseConfig = this.getBaseConfigForTask(config, task);
-    return baseConfig.modelName;
+    // Priority order:
+    // 1. Explicit config from GraphConfig (user selected in UI)
+    // 2. Environment variable (DEFAULT_{TASK}_MODEL)
+    // 3. Hardcoded default from TASK_TO_CONFIG_DEFAULTS_MAP
+    const defaultModelName = this.getDefaultModelForTask(task);
+    const modelName = config.configurable?.[`${task}ModelName`] ?? defaultModelName;
+    return modelName;
+  }
+
+  /**
+   * Get default model name for a task from environment variable or use hardcoded default
+   * Pattern: DEFAULT_{TASK}_MODEL
+   * Example: DEFAULT_PLANNER_MODEL=anthropic:claude-opus-4-5
+   */
+  private getDefaultModelForTask(task: LLMTask): string {
+    const envKey = `DEFAULT_${task.toUpperCase()}_MODEL`;
+    const envValue = process.env[envKey];
+
+    if (envValue) {
+      logger.info(`[${task.toUpperCase()}] Using model from env var ${envKey}: ${envValue}`);
+      return envValue;
+    }
+
+    // Fallback to hardcoded default
+    const hardcodedModel = TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName;
+    logger.info(`[${task.toUpperCase()}] Using hardcoded default model: ${hardcodedModel}`);
+    return hardcodedModel;
   }
 
   /**
@@ -303,35 +353,49 @@ export class ModelManager {
     config: GraphConfig,
     task: LLMTask,
   ): ModelLoadConfig {
+    // Priority order:
+    // 1. Explicit config from GraphConfig (user selected in UI)
+    // 2. If modelProvider is set, use models from that provider
+    // 3. Environment variable (DEFAULT_{TASK}_MODEL)
+    // 4. Hardcoded default from TASK_TO_CONFIG_DEFAULTS_MAP
+    
+    // Check if a provider is selected
+    const selectedProvider = (config.configurable as any)?.modelProvider as Provider | undefined;
+    let defaultModelName = this.getDefaultModelForTask(task);
+    
+    // If provider is set and no explicit model is configured for this task, use provider's default
+    if (selectedProvider && !config.configurable?.[`${task}ModelName`]) {
+      const providerModel = this.getDefaultModelForProvider(selectedProvider, task);
+      if (providerModel) {
+        defaultModelName = `${providerModel.provider}:${providerModel.modelName}`;
+        logger.info(`[${task.toUpperCase()}] Using model from selected provider '${selectedProvider}': ${defaultModelName}`);
+      }
+    }
+
     const taskMap = {
       [LLMTask.PLANNER]: {
         modelName:
-          config.configurable?.[`${task}ModelName`] ??
-          TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName,
+          config.configurable?.[`${task}ModelName`] ?? defaultModelName,
         temperature: config.configurable?.[`${task}Temperature`] ?? 0,
       },
       [LLMTask.PROGRAMMER]: {
         modelName:
-          config.configurable?.[`${task}ModelName`] ??
-          TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName,
+          config.configurable?.[`${task}ModelName`] ?? defaultModelName,
         temperature: config.configurable?.[`${task}Temperature`] ?? 0,
       },
       [LLMTask.REVIEWER]: {
         modelName:
-          config.configurable?.[`${task}ModelName`] ??
-          TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName,
+          config.configurable?.[`${task}ModelName`] ?? defaultModelName,
         temperature: config.configurable?.[`${task}Temperature`] ?? 0,
       },
       [LLMTask.ROUTER]: {
         modelName:
-          config.configurable?.[`${task}ModelName`] ??
-          TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName,
+          config.configurable?.[`${task}ModelName`] ?? defaultModelName,
         temperature: config.configurable?.[`${task}Temperature`] ?? 0,
       },
       [LLMTask.SUMMARIZER]: {
         modelName:
-          config.configurable?.[`${task}ModelName`] ??
-          TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName,
+          config.configurable?.[`${task}ModelName`] ?? defaultModelName,
         temperature: config.configurable?.[`${task}Temperature`] ?? 0,
       },
     };
@@ -358,39 +422,71 @@ export class ModelManager {
       provider: modelProvider as Provider,
       ...(modelName.includes("gpt-5")
         ? {
-            max_completion_tokens: config.configurable?.maxTokens ?? 10_000,
-            temperature: 1,
-          }
+          max_completion_tokens: config.configurable?.maxTokens ?? 10_000,
+          temperature: 1,
+        }
         : {
-            maxTokens: config.configurable?.maxTokens ?? 10_000,
-            temperature: taskConfig.temperature,
-          }),
+          maxTokens: config.configurable?.maxTokens ?? 10_000,
+          temperature: taskConfig.temperature,
+        }),
       thinkingModel,
       thinkingBudgetTokens,
     };
   }
 
   /**
+   * Get model name from environment variable or fallback to default
+   * Pattern: FALLBACK_{PROVIDER}_{TASK}_MODEL
+   * Example: FALLBACK_ANTHROPIC_PLANNER_MODEL=claude-opus-4-5
+   */
+  private getModelFromEnv(
+    provider: Provider,
+    task: LLMTask,
+    defaultValue: string,
+  ): string {
+    // Map provider names to env var format
+    const providerMap: Record<Provider, string> = {
+      "anthropic": "ANTHROPIC",
+      "openai": "OPENAI",
+      "google-genai": "GOOGLE_GENAI",
+    };
+
+    const providerEnv = providerMap[provider] || provider.toUpperCase().replace("-", "_");
+    const envKey = `FALLBACK_${providerEnv}_${task.toUpperCase()}_MODEL`;
+    const envValue = process.env[envKey];
+
+    if (envValue) {
+      logger.info(`[FALLBACK ${provider.toUpperCase()}] Using fallback model from env var ${envKey}: ${envValue}`);
+      return envValue;
+    }
+
+    logger.info(`[FALLBACK ${provider.toUpperCase()}] Using hardcoded fallback model: ${defaultValue}`);
+    return defaultValue;
+  }
+
+  /**
    * Get default model for a provider and task
+   * Models can be configured via environment variables or use hardcoded defaults
    */
   private getDefaultModelForProvider(
     provider: Provider,
     task: LLMTask,
   ): ModelLoadConfig | null {
-    const defaultModels: Record<Provider, Record<LLMTask, string>> = {
+    // Hardcoded defaults (used only if env vars are not set)
+    const hardcodedDefaults: Record<Provider, Record<LLMTask, string>> = {
       anthropic: {
-        [LLMTask.PLANNER]: "claude-opus-4-5",
-        [LLMTask.PROGRAMMER]: "claude-opus-4-5",
-        [LLMTask.REVIEWER]: "claude-opus-4-5",
-        [LLMTask.ROUTER]: "claude-haiku-4-5-latest",
-        [LLMTask.SUMMARIZER]: "claude-opus-4-5",
+        [LLMTask.PLANNER]: "claude-sonnet-4-0",
+        [LLMTask.PROGRAMMER]: "claude-sonnet-4-0",
+        [LLMTask.REVIEWER]: "claude-sonnet-4-0",
+        [LLMTask.ROUTER]: "claude-3-5-haiku-latest",
+        [LLMTask.SUMMARIZER]: "claude-sonnet-4-0",
       },
       "google-genai": {
-        [LLMTask.PLANNER]: "gemini-3-pro-preview",
-        [LLMTask.PROGRAMMER]: "gemini-3-pro-preview",
-        [LLMTask.REVIEWER]: "gemini-flash-latest",
-        [LLMTask.ROUTER]: "gemini-flash-latest",
-        [LLMTask.SUMMARIZER]: "gemini-3-pro-preview",
+        [LLMTask.PLANNER]: "gemini-2.5-pro",
+        [LLMTask.PROGRAMMER]: "gemini-2.5-pro",
+        [LLMTask.REVIEWER]: "gemini-2.5-flash",
+        [LLMTask.ROUTER]: "gemini-2.5-flash",
+        [LLMTask.SUMMARIZER]: "gemini-2.5-pro",
       },
       openai: {
         [LLMTask.PLANNER]: "gpt-5-codex",
@@ -401,10 +497,14 @@ export class ModelManager {
       },
     };
 
-    const modelName = defaultModels[provider][task];
-    if (!modelName) {
+    // Get hardcoded default value
+    const hardcodedValue = hardcodedDefaults[provider]?.[task];
+    if (!hardcodedValue) {
       return null;
     }
+
+    // Try to get model from environment variable first, fallback to hardcoded value
+    const modelName = this.getModelFromEnv(provider, task, hardcodedValue);
     return { provider, modelName };
   }
 
@@ -490,6 +590,7 @@ export class ModelManager {
   public getCircuitBreakerStatus(): Map<string, CircuitBreakerState> {
     return new Map(this.circuitBreakers);
   }
+
 
   /**
    * Cleanup on shutdown

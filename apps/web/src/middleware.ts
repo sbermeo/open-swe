@@ -4,6 +4,7 @@ import {
   GITHUB_INSTALLATION_ID_COOKIE,
 } from "@openswe/shared/constants";
 import { verifyGithubUser } from "@openswe/shared/github/verify-user";
+import { createAppUrl } from "@/lib/url";
 
 export async function middleware(request: NextRequest) {
   const token = request.cookies.get(GITHUB_TOKEN_COOKIE)?.value;
@@ -14,17 +15,13 @@ export async function middleware(request: NextRequest) {
 
   if (request.nextUrl.pathname === "/") {
     if (user) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/chat";
-      return NextResponse.redirect(url);
+      return NextResponse.redirect(createAppUrl("/chat"));
     }
   }
 
   if (request.nextUrl.pathname.startsWith("/chat")) {
     if (!user) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/";
-      return NextResponse.redirect(url);
+      return NextResponse.redirect(createAppUrl("/"));
     }
   }
 

@@ -25,6 +25,38 @@ import { hasApiKeySet } from "@/lib/api-keys";
 import { useUser } from "@/hooks/useUser";
 import { isAllowedUser } from "@openswe/shared/github/allowed-users";
 import { repoHasIssuesEnabled } from "@/lib/repo-has-issues";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
+import { Label } from "../ui/label";
+
+const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
+  anthropic: {
+    plannerModelName: "anthropic:claude-opus-4-5",
+    programmerModelName: "anthropic:claude-opus-4-5",
+    reviewerModelName: "anthropic:claude-opus-4-5",
+    routerModelName: "anthropic:claude-haiku-4-5-latest",
+    summarizerModelName: "anthropic:claude-opus-4-5",
+  },
+  "google-genai": {
+    plannerModelName: "google-genai:models/gemini-3-pro-preview",
+    programmerModelName: "google-genai:models/gemini-3-pro-preview",
+    reviewerModelName: "google-genai:models/gemini-2.5-flash",
+    routerModelName: "google-genai:models/gemini-2.5-flash",
+    summarizerModelName: "google-genai:models/gemini-3-pro-preview",
+  },
+  openai: {
+    plannerModelName: "openai:gpt-5-codex",
+    programmerModelName: "openai:gpt-5-codex",
+    reviewerModelName: "openai:gpt-5-codex",
+    routerModelName: "openai:gpt-5-nano",
+    summarizerModelName: "openai:gpt-5-mini",
+  },
+};
 
 interface TerminalInputProps {
   placeholder?: string;
@@ -83,10 +115,26 @@ export function TerminalInput({
 }: TerminalInputProps) {
   const { push } = useRouter();
   const { message, setMessage, clearCurrentDraft } = useDraftStorage();
-  const { getConfig } = useConfigStore();
+  const { getConfig, updateConfig } = useConfigStore();
   const { selectedRepository, repositories } = useGitHubAppProvider();
   const [loading, setLoading] = useState(false);
   const { user, isLoading: isUserLoading } = useUser();
+  
+  const currentConfig = getConfig(DEFAULT_CONFIG_KEY);
+  const selectedProvider = currentConfig?.modelProvider || "anthropic";
+
+  const handleProviderChange = (provider: string) => {
+    // Update provider
+    updateConfig(DEFAULT_CONFIG_KEY, "modelProvider", provider);
+
+    // Update all model fields for the selected provider
+    if (provider && PROVIDER_MODEL_MAPPINGS[provider]) {
+      const modelMappings = PROVIDER_MODEL_MAPPINGS[provider];
+      Object.entries(modelMappings).forEach(([modelField, modelValue]) => {
+        updateConfig(DEFAULT_CONFIG_KEY, modelField, modelValue);
+      });
+    }
+  };
 
   const stream = useStream<GraphState>({
     apiUrl,

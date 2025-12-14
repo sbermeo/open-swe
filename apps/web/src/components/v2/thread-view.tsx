@@ -48,6 +48,7 @@ import { StickToBottom } from "use-stick-to-bottom";
 import { TokenUsage } from "./token-usage";
 import { HumanMessage as HumanMessageSDK } from "@langchain/langgraph-sdk";
 import { getMessageContentString } from "@openswe/shared/messages";
+import { DEFAULT_CONFIG_KEY, useConfigStore } from "@/hooks/useConfigStore";
 import { useUser } from "@/hooks/useUser";
 
 interface ThreadViewProps {
@@ -322,18 +323,27 @@ export function ThreadView({
     stream.stop();
   };
 
+  const { getConfig } = useConfigStore();
+
   const handleSendMessage = () => {
     if (chatInput.trim()) {
       const newHumanMessage = new HumanMessage({
         id: uuidv4(),
         content: chatInput,
       });
+      const defaultConfig = getConfig(DEFAULT_CONFIG_KEY);
+      
       stream.submit(
         {
           messages: [newHumanMessage],
         },
         {
           streamResumable: true,
+          config: {
+            configurable: {
+              ...defaultConfig,
+            },
+          },
           optimisticValues: (prev) => ({
             ...prev,
             messages: [...(prev.messages ?? []), newHumanMessage],

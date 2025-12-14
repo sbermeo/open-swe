@@ -15,6 +15,39 @@ import { CollapsibleAlert } from "./collapsible-alert";
 import { Loader2 } from "lucide-react";
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { RestartRun } from "./restart-run";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
+import { DEFAULT_CONFIG_KEY, useConfigStore } from "@/hooks/useConfigStore";
+import { Label } from "../ui/label";
+
+const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
+  anthropic: {
+    plannerModelName: "anthropic:claude-opus-4-5",
+    programmerModelName: "anthropic:claude-opus-4-5",
+    reviewerModelName: "anthropic:claude-opus-4-5",
+    routerModelName: "anthropic:claude-3-5-haiku-latest",
+    summarizerModelName: "anthropic:claude-opus-4-5",
+  },
+  "google-genai": {
+    plannerModelName: "google-genai:gemini-2.5-pro",
+    programmerModelName: "google-genai:gemini-2.5-pro",
+    reviewerModelName: "google-genai:gemini-2.5-flash",
+    routerModelName: "google-genai:gemini-2.5-flash",
+    summarizerModelName: "google-genai:gemini-2.5-pro",
+  },
+  openai: {
+    plannerModelName: "openai:gpt-5-codex",
+    programmerModelName: "openai:gpt-5-codex",
+    reviewerModelName: "openai:gpt-5-codex",
+    routerModelName: "openai:gpt-5-nano",
+    summarizerModelName: "openai:gpt-5-mini",
+  },
+};
 
 function MessageCopyButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false);
@@ -175,6 +208,23 @@ export function ManagerChat({
   githubUser,
   disableSubmit,
 }: ManagerChatProps) {
+  const { getConfig, updateConfig } = useConfigStore();
+  const currentConfig = getConfig(DEFAULT_CONFIG_KEY);
+  const selectedProvider = currentConfig?.modelProvider || "anthropic";
+
+  const handleProviderChange = (provider: string) => {
+    // Update provider
+    updateConfig(DEFAULT_CONFIG_KEY, "modelProvider", provider);
+
+    // Update all model fields for the selected provider
+    if (provider && PROVIDER_MODEL_MAPPINGS[provider]) {
+      const modelMappings = PROVIDER_MODEL_MAPPINGS[provider];
+      Object.entries(modelMappings).forEach(([modelField, modelValue]) => {
+        updateConfig(DEFAULT_CONFIG_KEY, modelField, modelValue);
+      });
+    }
+  };
+
   return (
     <div className="border-border bg-muted/30 flex h-full w-1/3 flex-col overflow-hidden border-r">
       <div className="relative flex-1">
@@ -304,8 +354,26 @@ export function ManagerChat({
             </Button>
           )}
         </div>
-        <div className="text-muted-foreground mt-2 text-xs">
-          Press Cmd+Enter to send
+        <div className="flex items-center justify-between mt-2">
+          <div className="text-muted-foreground text-xs">
+            Press Cmd+Enter to send
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="text-muted-foreground text-xs">Model Provider:</Label>
+            <Select
+              value={selectedProvider}
+              onValueChange={handleProviderChange}
+            >
+              <SelectTrigger className="bg-background h-7 text-xs w-[160px]">
+                <SelectValue placeholder="Select provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                <SelectItem value="openai">OpenAI</SelectItem>
+                <SelectItem value="google-genai">Google GenAI (Gemini)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
     </div>

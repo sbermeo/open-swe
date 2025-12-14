@@ -27,13 +27,45 @@ import { UserPopover } from "../user-popover";
 import { useThreadsStatus } from "@/hooks/useThreadsStatus";
 import { Thread } from "@langchain/langgraph-sdk";
 import { ManagerGraphState } from "@openswe/shared/open-swe/manager/types";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { threadsToMetadata } from "@/lib/thread-utils";
 import { Settings, BookOpen } from "lucide-react";
 import NextLink from "next/link";
 import { OpenSWELogo } from "../icons/openswe-logo";
 import { OpenSWEIcon } from "../icons/openswe-icon";
 import { DEFAULT_CONFIG_KEY, useConfigStore } from "@/hooks/useConfigStore";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
+import { Label } from "../ui/label";
+
+const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
+  anthropic: {
+    plannerModelName: "anthropic:claude-opus-4-5",
+    programmerModelName: "anthropic:claude-opus-4-5",
+    reviewerModelName: "anthropic:claude-opus-4-5",
+    routerModelName: "anthropic:claude-3-5-haiku-latest",
+    summarizerModelName: "anthropic:claude-opus-4-5",
+  },
+  "google-genai": {
+    plannerModelName: "google-genai:gemini-2.5-pro",
+    programmerModelName: "google-genai:gemini-2.5-pro",
+    reviewerModelName: "google-genai:gemini-2.5-flash",
+    routerModelName: "google-genai:gemini-2.5-flash",
+    summarizerModelName: "google-genai:gemini-2.5-pro",
+  },
+  openai: {
+    plannerModelName: "openai:gpt-5-codex",
+    programmerModelName: "openai:gpt-5-codex",
+    reviewerModelName: "openai:gpt-5-codex",
+    routerModelName: "openai:gpt-5-nano",
+    summarizerModelName: "openai:gpt-5-mini",
+  },
+};
 
 function OpenSettingsButton() {
   return (
@@ -88,8 +120,34 @@ export function DefaultView({ threads, threadsLoading }: DefaultViewProps) {
   const apiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL ?? "";
   const [draftToLoad, setDraftToLoad] = useState("");
   const assistantId: string | undefined = MANAGER_GRAPH_ID;
-  const { getConfig } = useConfigStore();
+  const { getConfig, updateConfig } = useConfigStore();
   const config = getConfig(DEFAULT_CONFIG_KEY);
+  
+  const selectedProvider = config?.modelProvider || "anthropic";
+
+  const handleProviderChange = (provider: string) => {
+    // Update provider
+    updateConfig(DEFAULT_CONFIG_KEY, "modelProvider", provider);
+
+    // Update all model fields for the selected provider
+    if (provider && PROVIDER_MODEL_MAPPINGS[provider]) {
+      const modelMappings = PROVIDER_MODEL_MAPPINGS[provider];
+      Object.entries(modelMappings).forEach(([modelField, modelValue]) => {
+        updateConfig(DEFAULT_CONFIG_KEY, modelField, modelValue);
+      });
+    }
+  };
+
+  // Initialize with anthropic if no provider is set
+  useEffect(() => {
+    if (!config?.modelProvider) {
+      updateConfig(DEFAULT_CONFIG_KEY, "modelProvider", "anthropic");
+      const anthropicMappings = PROVIDER_MODEL_MAPPINGS["anthropic"];
+      Object.entries(anthropicMappings).forEach(([modelField, modelValue]) => {
+        updateConfig(DEFAULT_CONFIG_KEY, modelField, modelValue);
+      });
+    }
+  }, [config?.modelProvider, updateConfig]);
   const {
     contentBlocks,
     setContentBlocks,
@@ -242,6 +300,22 @@ export function DefaultView({ threads, threadsLoading }: DefaultViewProps) {
                       <OpenSWEIcon className="size-5" />
                     )}
                   </TooltipIconButton>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Label className="text-muted-foreground text-xs">Model Provider:</Label>
+                    <Select
+                      value={selectedProvider}
+                      onValueChange={handleProviderChange}
+                    >
+                      <SelectTrigger className="bg-background h-7 text-xs w-[160px]">
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                        <SelectItem value="openai">OpenAI</SelectItem>
+                        <SelectItem value="google-genai">Google GenAI (Gemini)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
             </CardContent>

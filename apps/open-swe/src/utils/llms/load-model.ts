@@ -3,10 +3,7 @@ import { getModelManager, Provider } from "./model-manager.js";
 import { FallbackRunnable } from "../runtime-fallback.js";
 import { BindToolsInput } from "@langchain/core/language_models/chat_models";
 import { BaseMessageLike } from "@langchain/core/messages";
-import {
-  LLMTask,
-  TASK_TO_CONFIG_DEFAULTS_MAP,
-} from "@openswe/shared/open-swe/llm-task";
+import { LLMTask } from "@openswe/shared/open-swe/llm-task";
 
 export async function loadModel(
   config: GraphConfig,
@@ -38,9 +35,11 @@ export function supportsParallelToolCallsParam(
   config: GraphConfig,
   task: LLMTask,
 ): boolean {
+  const modelManager = getModelManager();
+  // Use modelManager to get model name (respects env vars)
+  const modelName = modelManager.getModelNameForTask(config, task);
   const modelStr =
-    config.configurable?.[`${task}ModelName`] ??
-    TASK_TO_CONFIG_DEFAULTS_MAP[task].modelName;
+    config.configurable?.[`${task}ModelName`] ?? modelName;
 
   return !MODELS_NO_PARALLEL_TOOL_CALLING.some((model) => modelStr === model);
 }

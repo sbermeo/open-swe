@@ -12,6 +12,7 @@ import {
   AIMessageChunk,
   BaseMessage,
   BaseMessageLike,
+  ToolCall,
 } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration } from "@langchain/core/outputs";
 import { BaseLanguageModelInput } from "@langchain/core/language_models/base";
@@ -110,6 +111,12 @@ export class FallbackRunnable<
         continue;
       }
 
+      if (i === 0) {
+        logger.info(`[${this.task.toUpperCase()}] Attempting to use primary model: ${modelKey}`);
+      } else {
+        logger.info(`[${this.task.toUpperCase()}] ⚠️  FALLBACK ${i}: Attempting to use model: ${modelKey}`);
+      }
+
       const graphConfig = getConfig() as GraphConfig;
 
       try {
@@ -171,13 +178,39 @@ export class FallbackRunnable<
           ),
           options,
         );
+        
+        if (i === 0) {
+          logger.info(`[${this.task.toUpperCase()}] ✅ Successfully using model: ${modelKey}`);
+        } else {
+          logger.info(`[${this.task.toUpperCase()}] ✅ Successfully using FALLBACK model: ${modelKey}`);
+        }
+        
         this.modelManager.recordSuccess(modelKey);
         return result;
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        lastError = error instanceof Error ? error : new Error(errorMessage);
+        
+        // Check if it's an authentication error (401 or API key error)
+        const isAuthError = errorMessage.includes("401") || 
+                           errorMessage.includes("Incorrect API key") ||
+                           errorMessage.includes("API key") ||
+                           errorMessage.includes("authentication") ||
+                           errorMessage.includes("Invalid API key");
+        
+        if (isAuthError) {
+          logger.error(
+            `Authentication error with ${modelConfig.provider} model ${modelKey}: ${errorMessage}. Please verify your API key in Settings.`,
+          );
+          // Don't try other models if it's an auth error - the API key is wrong
+          throw new Error(
+            `Authentication failed for ${modelConfig.provider}. Please verify your API key is correct in Settings. Error: ${errorMessage}`,
+          );
+        }
+        
         logger.warn(
-          `${modelKey} failed: ${error instanceof Error ? error.message : String(error)}`,
+          `${modelKey} failed: ${errorMessage}`,
         );
-        lastError = error instanceof Error ? error : new Error(String(error));
         this.modelManager.recordFailure(modelKey);
       }
     }
@@ -280,4 +313,5 @@ export class FallbackRunnable<
 
     return null;
   }
+
 }

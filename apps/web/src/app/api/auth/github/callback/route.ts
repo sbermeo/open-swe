@@ -6,6 +6,7 @@ import {
 } from "@openswe/shared/constants";
 import { getInstallationCookieOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
+import { createAppUrl } from "@/lib/url";
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,14 +19,14 @@ export async function GET(request: NextRequest) {
     // Handle GitHub App errors
     if (error) {
       return NextResponse.redirect(
-        new URL(`/?error=${encodeURIComponent(error)}`, request.url),
+        createAppUrl(`/?error=${encodeURIComponent(error)}`),
       );
     }
 
     // Validate required parameters
     if (!code) {
       return NextResponse.redirect(
-        new URL("/?error=missing_code_parameter", request.url),
+        createAppUrl("/?error=missing_code_parameter"),
       );
     }
 
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
 
     if (storedState && state !== storedState) {
       return NextResponse.redirect(
-        new URL("/?error=invalid_state", request.url),
+        createAppUrl("/?error=invalid_state"),
       );
     }
 
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
 
     if (!clientId || !clientSecret || !redirectUri) {
       return NextResponse.redirect(
-        new URL("/?error=configuration_missing", request.url),
+        createAppUrl("/?error=configuration_missing"),
       );
     }
 
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
     if (!tokenResponse.ok) {
       console.error("Token exchange failed:", await tokenResponse.text());
       return NextResponse.redirect(
-        new URL("/?error=token_exchange_failed", request.url),
+        createAppUrl("/?error=token_exchange_failed"),
       );
     }
 
@@ -77,12 +78,12 @@ export async function GET(request: NextRequest) {
 
     if (tokenData.error) {
       return NextResponse.redirect(
-        new URL(`/?error=${encodeURIComponent(tokenData.error)}`, request.url),
+        createAppUrl(`/?error=${encodeURIComponent(tokenData.error)}`),
       );
     }
 
     // Create the success response
-    const response = NextResponse.redirect(new URL("/chat", request.url));
+    const response = NextResponse.redirect(createAppUrl("/chat"));
 
     // Clear the state cookie as it's no longer needed
     response.cookies.set(GITHUB_AUTH_STATE_COOKIE, "", {
@@ -124,7 +125,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("GitHub App callback error:", error);
     return NextResponse.redirect(
-      new URL("/?error=callback_failed", request.url),
+      createAppUrl("/?error=callback_failed"),
     );
   }
 }
