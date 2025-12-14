@@ -5365,6 +5365,51 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@redis/bloom@npm:5.10.0":
+  version: 5.10.0
+  resolution: "@redis/bloom@npm:5.10.0"
+  peerDependencies:
+    "@redis/client": ^5.10.0
+  checksum: 279c343464b55c113d301287f31637d325e29bd6927e5782a04e47f5bcbfa2326d131398d5c5e13d8f4c42d0952bad7abec75cf40163b3bb9249d730413e3807
+  languageName: node
+  linkType: hard
+
+"@redis/client@npm:5.10.0":
+  version: 5.10.0
+  resolution: "@redis/client@npm:5.10.0"
+  dependencies:
+    cluster-key-slot: 1.1.2
+  checksum: aad75a2af0f25c88bdb1e2be3ee3d71daee1f315b2c1c2fd36cb071cbfe7d44320807d3747dbe6d6d9587ba9fde779fc2a84a9bd621ecde2b94fd54e29c52265
+  languageName: node
+  linkType: hard
+
+"@redis/json@npm:5.10.0":
+  version: 5.10.0
+  resolution: "@redis/json@npm:5.10.0"
+  peerDependencies:
+    "@redis/client": ^5.10.0
+  checksum: f47422aa78d3941061a2ece5a081f88c93e80a83792a92d67dadc1f90ef2ecddf83788f865bb896826255cd583285a03b6cd930d9d0f20d01ac6c995aaeae562
+  languageName: node
+  linkType: hard
+
+"@redis/search@npm:5.10.0":
+  version: 5.10.0
+  resolution: "@redis/search@npm:5.10.0"
+  peerDependencies:
+    "@redis/client": ^5.10.0
+  checksum: 9416ff441d53769c215105d55ceed78bba5daf1e6389aead72a5ec5e555e187ab63c248225ab7e20bb9d248a0a42c25cbd10f6feab569a10205a27a53684fec5
+  languageName: node
+  linkType: hard
+
+"@redis/time-series@npm:5.10.0":
+  version: 5.10.0
+  resolution: "@redis/time-series@npm:5.10.0"
+  peerDependencies:
+    "@redis/client": ^5.10.0
+  checksum: 9dbc673213600583c0b32bf3fae8321f09df7ace94e65f2e2c8d0aaa52ca7173fb43e56a2d801d0dff3294465c1704edfd08aef7159e11749e86a9eb114d95a7
+  languageName: node
+  linkType: hard
+
 "@rollup/rollup-android-arm-eabi@npm:4.45.1":
   version: 4.45.1
   resolution: "@rollup/rollup-android-arm-eabi@npm:4.45.1"
@@ -9001,6 +9046,13 @@ __metadata:
   version: 2.1.1
   resolution: "clsx@npm:2.1.1"
   checksum: acd3e1ab9d8a433ecb3cc2f6a05ab95fe50b4a3cfc5ba47abb6cbf3754585fcb87b84e90c822a1f256c4198e3b41c7f6c391577ffc8678ad587fc0976b24fd57
+  languageName: node
+  linkType: hard
+
+"cluster-key-slot@npm:1.1.2":
+  version: 1.1.2
+  resolution: "cluster-key-slot@npm:1.1.2"
+  checksum: be0ad2d262502adc998597e83f9ded1b80f827f0452127c5a37b22dfca36bab8edf393f7b25bb626006fb9fb2436106939ede6d2d6ecf4229b96a47f27edd681
   languageName: node
   linkType: hard
 
@@ -16297,6 +16349,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "open-swe@workspace:."
   dependencies:
+    redis: ^5.10.0
     turbo: ^2.5.0
     typescript: ^5
   languageName: unknown
@@ -17650,6 +17703,19 @@ __metadata:
     unified: ^11.0.0
     vfile: ^6.0.0
   checksum: 3a4f80fe0f6bc11fefa71782dfedb43c28b42518dea450cd1b1591057d9d570f83c85d645bf5ed6da2e47de15a021172c076a8ff4675799855d9f9436cec3c82
+  languageName: node
+  linkType: hard
+
+"redis@npm:^5.10.0":
+  version: 5.10.0
+  resolution: "redis@npm:5.10.0"
+  dependencies:
+    "@redis/bloom": 5.10.0
+    "@redis/client": 5.10.0
+    "@redis/json": 5.10.0
+    "@redis/search": 5.10.0
+    "@redis/time-series": 5.10.0
+  checksum: 9a9bed3ca472a48bc43362eab9c0962b18f32457065475bfb2bd0ee9b278b65796ca1d33fd3125878e4e64ada00150d37533dced4ca68356950b6aa1e42a0b16
   languageName: node
   linkType: hard
 

@@ -76,7 +76,7 @@ export const auth = new Auth()
         throw new HTTPException(401, { message: "Missing bearer token" });
       }
 
-      const user = validateApiBearerToken(token);
+      const user = await validateApiBearerToken(token);
       if (user) {
         return user;
       }

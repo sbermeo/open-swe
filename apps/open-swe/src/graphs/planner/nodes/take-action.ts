@@ -57,8 +57,9 @@ export async function takeActions(
   const shellTool = createShellTool(state, config);
   const searchTool = createGrepTool(state, config);
   const scratchpadTool = createScratchpadTool("");
-  const getURLContentTool = createGetURLContentTool(state);
-  const searchDocumentForTool = createSearchDocumentForTool(state, config);
+  const threadId = config.thread_id;
+  const getURLContentTool = createGetURLContentTool(state, threadId);
+  const searchDocumentForTool = createSearchDocumentForTool(state, config, threadId);
   const mcpTools = await getMcpTools(config);
 
   const higherContextLimitToolNames = [
@@ -168,6 +169,7 @@ export async function takeActions(
         higherContextLimitToolNames,
         state,
         config,
+        threadId: config.thread_id,
       },
     );
 

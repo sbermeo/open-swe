@@ -2,6 +2,7 @@ import { GraphConfig, GraphState } from "@openswe/shared/open-swe/types";
 import { truncateOutput } from "./truncate-outputs.js";
 import { handleMcpDocumentationOutput } from "./mcp-output/index.js";
 import { parseUrl } from "./url-parser.js";
+import { getDocumentCache, setDocumentCache } from "./redis-state.js";
 
 interface ToolCall {
   name: string;
@@ -20,12 +21,13 @@ export async function processToolCallContent(
     higherContextLimitToolNames: string[];
     state: Pick<GraphState, "documentCache">;
     config: GraphConfig;
+    threadId?: string;
   },
 ): Promise<{
   content: string;
   stateUpdates?: Partial<Pick<GraphState, "documentCache">>;
 }> {
-  const { higherContextLimitToolNames, state, config } = options;
+  const { higherContextLimitToolNames, state, config, threadId } = options;
 
   if (toolCall.name === "search_document_for") {
     return {
@@ -39,10 +41,20 @@ export async function processToolCallContent(
     const parsedResult = typeof url === "string" ? parseUrl(url) : null;
     const parsedUrl = parsedResult?.success ? parsedResult.url.href : undefined;
 
-    // avoid generating TOC again if it's already in the cache
-    if (parsedUrl && state.documentCache[parsedUrl]) {
+    // Check Redis cache first, then fallback to state cache
+    let cachedContent: string | null = null;
+    if (parsedUrl && threadId) {
+      cachedContent = await getDocumentCache(threadId, parsedUrl);
+    }
+    
+    // Fallback to state cache if Redis doesn't have it
+    if (!cachedContent && parsedUrl && state.documentCache[parsedUrl]) {
+      cachedContent = state.documentCache[parsedUrl];
+    }
+
+    if (cachedContent) {
       return {
-        content: state.documentCache[parsedUrl],
+        content: cachedContent,
       };
     }
 
@@ -54,18 +66,28 @@ export async function processToolCallContent(
       },
     );
 
-    const stateUpdates = parsedUrl
-      ? {
-          documentCache: {
-            ...state.documentCache,
-            [parsedUrl]: result,
-          },
-        }
-      : undefined;
+    // Store in Redis if we have threadId, otherwise use state cache
+    if (parsedUrl) {
+      if (threadId) {
+        await setDocumentCache(threadId, parsedUrl, result);
+      }
+      
+      // Also update state cache for backward compatibility
+      const stateUpdates = {
+        documentCache: {
+          ...state.documentCache,
+          [parsedUrl]: result,
+        },
+      };
+
+      return {
+        content: processedContent,
+        stateUpdates,
+      };
+    }
 
     return {
       content: processedContent,
-      stateUpdates,
     };
   } else {
     return {

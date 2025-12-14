@@ -22,6 +22,7 @@ import { graph as reviewerGraph } from "../reviewer/index.js";
 import { getRemainingPlanItems } from "../../utils/current-task.js";
 import { getActivePlanItems } from "@openswe/shared/open-swe/tasks";
 import { createMarkTaskCompletedToolFields } from "@openswe/shared/open-swe/tools";
+import { handleModelFallback } from "../shared/handle-model-fallback.js";
 
 function lastMessagesMissingToolCalls(
   messages: BaseMessage[],
@@ -51,9 +52,32 @@ function routeGeneratedAction(
   | "request-help"
   | "generate-action"
   | "handle-completed-task"
+  | "handle-model-fallback"
   | Send {
   const { internalMessages } = state;
   const lastMessage = internalMessages[internalMessages.length - 1];
+  
+  // Check if the last message is a model selection response (after interrupt)
+  if (lastMessage.role === "human") {
+    const content = typeof lastMessage.content === "string" 
+      ? lastMessage.content 
+      : Array.isArray(lastMessage.content)
+      ? lastMessage.content.map((c: any) => typeof c === "string" ? c : c.text || "").join("")
+      : String(lastMessage.content);
+    
+    // Check if this looks like a model selection (contains ":" and is a short string)
+    if (content.trim().includes(":") && content.trim().split(":").length === 2 && content.trim().length < 100) {
+      // Check if there's a model fallback interrupt in the message history
+      for (let i = internalMessages.length - 2; i >= 0; i--) {
+        const msg = internalMessages[i];
+        const metadata = (msg as any).metadata;
+        if (metadata?.modelFallback) {
+          // This is a model selection response, redirect to handle-model-fallback
+          return "handle-model-fallback";
+        }
+      }
+    }
+  }
 
   // If the message is an AI message, and it has tool calls, we should take action.
   if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
@@ -154,8 +178,12 @@ const workflow = new StateGraph(GraphAnnotation, GraphConfiguration)
   .addNode("open-pr", openPullRequest)
   .addNode("diagnose-error", diagnoseError)
   .addNode("summarize-history", summarizeHistory)
+  .addNode("handle-model-fallback", handleModelFallback, {
+    ends: ["generate-action"],
+  })
   .addEdge(START, "initialize")
   .addEdge("initialize", "generate-action")
+  .addEdge("handle-model-fallback", "generate-action")
   .addConditionalEdges("generate-action", routeGeneratedAction, [
     "take-action",
     "request-help",
@@ -163,6 +191,7 @@ const workflow = new StateGraph(GraphAnnotation, GraphConfiguration)
     "update-plan",
     "generate-action",
     "handle-completed-task",
+    "handle-model-fallback",
   ])
   .addEdge("update-plan", "generate-action")
   .addEdge("diagnose-error", "generate-action")

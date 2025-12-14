@@ -2,6 +2,7 @@ import {
   ConfigurableModel,
   initChatModel,
 } from "langchain/chat_models/universal";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { GraphConfig } from "@openswe/shared/open-swe/types";
 import { createLogger, LogLevel } from "../logger.js";
 import {
@@ -11,6 +12,7 @@ import {
 import { isAllowedUser } from "@openswe/shared/github/allowed-users";
 import { decryptSecret } from "@openswe/shared/crypto";
 import { API_KEY_REQUIRED_MESSAGE } from "@openswe/shared/constants";
+import { getRedisStore, RedisStore } from "../redis-client.js";
 
 const logger = createLogger(LogLevel.INFO, "ModelManager");
 
@@ -23,7 +25,7 @@ export interface CircuitBreakerState {
   openedAt?: number;
 }
 
-interface ModelLoadConfig {
+export interface ModelLoadConfig {
   provider: Provider;
   modelName: string;
   temperature?: number;
@@ -89,7 +91,8 @@ const providerToApiKey = (
 
 export class ModelManager {
   private config: ModelManagerConfig;
-  private circuitBreakers: Map<string, CircuitBreakerState> = new Map();
+  private redisStore: RedisStore | null = null;
+  private readonly CIRCUIT_BREAKER_PREFIX = "circuit_breaker:";
 
   constructor(config: Partial<ModelManagerConfig> = {}) {
     this.config = { ...DEFAULT_MODEL_MANAGER_CONFIG, ...config };
@@ -98,6 +101,24 @@ export class ModelManager {
       config: this.config,
       fallbackOrder: this.config.fallbackOrder,
     });
+  }
+
+  /**
+   * Get Redis store instance (lazy initialization)
+   * Returns null if Redis is unavailable
+   */
+  private async getRedisStore(): Promise<RedisStore | null> {
+    if (!this.redisStore) {
+      this.redisStore = await getRedisStore();
+    }
+    return this.redisStore;
+  }
+
+  /**
+   * Get Redis key for circuit breaker
+   */
+  private getCircuitBreakerKey(modelKey: string): string {
+    return `${this.CIRCUIT_BREAKER_PREFIX}${modelKey}`;
   }
 
   /**
@@ -192,6 +213,13 @@ export class ModelManager {
       finalMaxTokens = finalMaxTokens > 8_192 ? 8_192 : finalMaxTokens;
     }
 
+    // HOTFIX: Correct invalid model ID if present
+    let correctedModelName = modelName;
+    if (modelName === "claude-sonnet-4-5-20251101") {
+      correctedModelName = "claude-sonnet-4-5-20250929";
+      logger.warn(`Correcting invalid model ID '${modelName}' to '${correctedModelName}'`);
+    }
+
     const apiKey = this.getUserApiKey(graphConfig, provider);
 
     const modelOptions: InitChatModelArgs = {
@@ -200,24 +228,87 @@ export class ModelManager {
       ...(apiKey ? { apiKey } : {}),
       ...(thinkingModel && provider === "anthropic"
         ? {
-          thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
-          maxTokens: thinkingMaxTokens,
-        }
-        : modelName.includes("gpt-5")
-          ? {
-            max_completion_tokens: finalMaxTokens,
-            temperature: 1,
+            thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
+            maxTokens: thinkingMaxTokens,
+            // Don't set temperature for thinking models - let Anthropic use defaults
           }
+        : correctedModelName.includes("gpt-5")
+          ? {
+              max_completion_tokens: finalMaxTokens,
+              temperature: 1,
+            }
           : {
-            maxTokens: finalMaxTokens,
-            temperature: thinkingModel ? undefined : temperature,
-          }),
+              maxTokens: finalMaxTokens,
+              // [CRITICAL FIX] DO NOT SEND TEMPERATURE FOR ANTHROPIC MODELS
+              // Sending temperature (even 0 or 1e-7) triggers issues with top_p defaults
+              temperature: (provider === "anthropic") 
+                ? undefined 
+                : (temperature !== undefined && !thinkingModel ? temperature : undefined),
+            }),
     };
 
-    const fullModelName = `${provider}:${modelName}`;
-    logger.info(`Initializing model: ${fullModelName} (provider: ${provider}, task config)`);
+    // [CRITICAL FIX] For Anthropic models, use top_p=0 and DELETE temperature.
+    // The API rejects requests with both parameters. We prefer top_p=0 over temperature for deterministic-like behavior.
+    if (provider === "anthropic") {
+      (modelOptions as any).top_p = 0;
+      // We can keep topP for consistency if needed, but top_p is standard
+      delete (modelOptions as any).topP; 
+      
+      delete (modelOptions as any).temperature; 
+      logger.info(`Set top_p=0 and removed temperature for ${provider}:${correctedModelName}`);
+    } else {
+        // For other models, only remove if it's -1
+        if ((modelOptions as any).top_p === -1 || (modelOptions as any).topP === -1) {
+          delete (modelOptions as any).top_p;
+          delete (modelOptions as any).topP;
+          logger.warn(`Removed top_p: -1 from model options for ${provider}:${correctedModelName}`);
+        }
+    }
 
-    return await initChatModel(modelName, modelOptions);
+    const fullModelName = `${provider}:${correctedModelName}`;
+    logger.info(`Initializing model: ${fullModelName} (provider: ${provider}, task config)`);
+    
+    // [DEBUG] Log completo para inspeccionar el request antes de enviarlo
+    console.log("----------------------------------------------------------------");
+    console.log(`[DEBUG REQUEST] Configuración para ${fullModelName}:`);
+    console.log(JSON.stringify(modelOptions, null, 2));
+    console.log("----------------------------------------------------------------");
+
+    let initializedModel;
+
+    // [CRITICAL FIX] Use ChatAnthropic directly to avoid initChatModel default logic 
+    // which incorrectly sets top_p: -1 for temperature: 0
+    if (provider === "anthropic") {
+        logger.info(`Using ChatAnthropic direct instantiation for ${correctedModelName}`);
+        initializedModel = new ChatAnthropic({
+            modelName: correctedModelName,
+            apiKey: apiKey || undefined,
+            maxTokens: (modelOptions as any).maxTokens,
+            // temperature: undefined, // DO NOT SEND TEMPERATURE
+            topP: 0, // Force topP to 0
+            // Add thinking param if needed
+            ...((modelOptions as any).thinking ? { thinking: (modelOptions as any).thinking } : {})
+        });
+        
+        // [CRITICAL HACK] Force delete temperature from the instance to prevent LangChain default (1.0) from being sent
+        if ((initializedModel as any).temperature !== undefined) {
+             delete (initializedModel as any).temperature;
+             logger.info(`Forcefully deleted 'temperature' property from ChatAnthropic instance for ${correctedModelName}`);
+        }
+    } else {
+        initializedModel = await initChatModel(correctedModelName, modelOptions);
+    }
+    
+    const initializedConfig = (initializedModel as any)?._defaultConfig;
+    if (initializedConfig && (initializedConfig.top_p === -1 || initializedConfig.topP === -1)) {
+      logger.warn(`Model ${fullModelName} has top_p: -1 in defaultConfig after initialization. Setting to 0.`);
+      initializedConfig.top_p = 0;
+      if (initializedConfig.topP !== undefined) {
+        initializedConfig.topP = 0;
+      }
+    }
+    
+    return initializedModel;
   }
 
   public getModelConfigs(
@@ -228,86 +319,20 @@ export class ModelManager {
     const configs: ModelLoadConfig[] = [];
     const baseConfig = this.getBaseConfigForTask(config, task);
 
-    // Check if a provider is selected - if so, only use that provider's models
-    const selectedProvider = (config.configurable as any)?.modelProvider as Provider | undefined;
+    // Always add the base configuration as the primary model
+    // This represents what is configured in GraphConfig or env vars
+    configs.push(baseConfig);
 
-    const defaultConfig = selectedModel._defaultConfig;
-    let selectedModelConfig: ModelLoadConfig | null = null;
-
-    if (defaultConfig) {
-      const provider = defaultConfig.modelProvider as Provider;
-      const modelName = defaultConfig.model;
-
-      if (provider && modelName) {
-        const isThinkingModel = baseConfig.thinkingModel;
-        selectedModelConfig = {
-          provider,
-          modelName,
-          ...(modelName.includes("gpt-5")
-            ? {
-              max_completion_tokens:
-                defaultConfig.maxTokens ?? baseConfig.maxTokens,
-              temperature: 1,
-            }
-            : {
-              maxTokens: defaultConfig.maxTokens ?? baseConfig.maxTokens,
-              temperature:
-                defaultConfig.temperature ?? baseConfig.temperature,
-            }),
-          ...(isThinkingModel
-            ? {
-              thinkingModel: true,
-              thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
-            }
-            : {}),
-        };
-        configs.push(selectedModelConfig);
-      }
-    }
-
+    /*
     // Add fallback models
     // If a provider is selected, only use fallbacks from that provider
     // Otherwise, use the default fallback order
+    const selectedProvider = (config.configurable as any)?.modelProvider as Provider | undefined;
     const fallbackProviders = selectedProvider 
       ? [selectedProvider] 
       : this.config.fallbackOrder;
-
-    for (const provider of fallbackProviders) {
-      const fallbackModel = this.getDefaultModelForProvider(provider, task);
-      if (
-        fallbackModel &&
-        (!selectedModelConfig ||
-          fallbackModel.modelName !== selectedModelConfig.modelName ||
-          fallbackModel.provider !== selectedModelConfig.provider)
-      ) {
-        // Check if fallback model is a thinking model
-        const isThinkingModel =
-          (provider === "openai" && fallbackModel.modelName.startsWith("o")) ||
-          fallbackModel.modelName.includes("extended-thinking");
-
-        const fallbackConfig = {
-          ...fallbackModel,
-          ...(fallbackModel.modelName.includes("gpt-5")
-            ? {
-              max_completion_tokens: baseConfig.maxTokens,
-              temperature: 1,
-            }
-            : {
-              maxTokens: baseConfig.maxTokens,
-              temperature: isThinkingModel
-                ? undefined
-                : baseConfig.temperature,
-            }),
-          ...(isThinkingModel
-            ? {
-              thinkingModel: true,
-              thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
-            }
-            : {}),
-        };
-        configs.push(fallbackConfig);
-      }
-    }
+    // ... (rest of commented fallback logic) ...
+    */
 
     return configs;
   }
@@ -329,7 +354,7 @@ export class ModelManager {
   /**
    * Get default model name for a task from environment variable or use hardcoded default
    * Pattern: DEFAULT_{TASK}_MODEL
-   * Example: DEFAULT_PLANNER_MODEL=anthropic:claude-opus-4-5
+   * Example: DEFAULT_PLANNER_MODEL=anthropic:claude-sonnet-4-5-20250929
    */
   private getDefaultModelForTask(task: LLMTask): string {
     const envKey = `DEFAULT_${task.toUpperCase()}_MODEL`;
@@ -437,7 +462,7 @@ export class ModelManager {
   /**
    * Get model name from environment variable or fallback to default
    * Pattern: FALLBACK_{PROVIDER}_{TASK}_MODEL
-   * Example: FALLBACK_ANTHROPIC_PLANNER_MODEL=claude-opus-4-5
+   * Example: FALLBACK_ANTHROPIC_PLANNER_MODEL=claude-sonnet-4-5-20250929
    */
   private getModelFromEnv(
     provider: Provider,
@@ -475,12 +500,22 @@ export class ModelManager {
     // Hardcoded defaults (used only if env vars are not set)
     const hardcodedDefaults: Record<Provider, Record<LLMTask, string>> = {
       anthropic: {
-        [LLMTask.PLANNER]: "claude-sonnet-4-0",
-        [LLMTask.PROGRAMMER]: "claude-sonnet-4-0",
-        [LLMTask.REVIEWER]: "claude-sonnet-4-0",
-        [LLMTask.ROUTER]: "claude-3-5-haiku-latest",
-        [LLMTask.SUMMARIZER]: "claude-sonnet-4-0",
-      },
+        // Planner: modelo fuerte (Opus 4.5 o Sonnet 4.5)
+        [LLMTask.PLANNER]: "claude-sonnet-4-5-20250929",
+      
+        // Programmer: equilibrio coste/rendimiento
+        [LLMTask.PROGRAMMER]: "claude-sonnet-4-5-20250929",
+      
+        // Reviewer: mismo que Programmer, suficiente para revisión
+        [LLMTask.REVIEWER]: "claude-sonnet-4-5-20250929",
+      
+        // Router: algo rápido y barato (Haiku 3.5 o Haiku 4.5)
+        [LLMTask.ROUTER]: "claude-3-5-haiku-20241022",
+      
+        // Summarizer: Sonnet está bien para resúmenes de calidad
+        [LLMTask.SUMMARIZER]: "claude-sonnet-4-5-20250929",
+      }
+      ,
       "google-genai": {
         [LLMTask.PLANNER]: "gemini-2.5-pro",
         [LLMTask.PROGRAMMER]: "gemini-2.5-pro",
@@ -509,10 +544,30 @@ export class ModelManager {
   }
 
   /**
+   * Get all available models from all providers
+   * Used for user selection when fallbacks fail
+   */
+  public getAllAvailableModels(task: LLMTask, currentProvider?: Provider): ModelLoadConfig[] {
+    const models: ModelLoadConfig[] = [];
+    const providers: Provider[] = ["anthropic", "openai", "google-genai"];
+    
+    for (const provider of providers) {
+      // Get default model for this provider/task
+      const defaultModel = this.getDefaultModelForProvider(provider, task);
+      if (defaultModel) {
+        // Add basic config
+        models.push(defaultModel);
+      }
+    }
+    
+    return models;
+  }
+
+  /**
    * Circuit breaker methods
    */
-  public isCircuitClosed(modelKey: string): boolean {
-    const state = this.getCircuitState(modelKey);
+  public async isCircuitClosed(modelKey: string): Promise<boolean> {
+    const state = await this.getCircuitState(modelKey);
 
     if (state.state === CircuitState.CLOSED) {
       return true;
@@ -524,6 +579,7 @@ export class ModelManager {
         state.state = CircuitState.CLOSED;
         state.failureCount = 0;
         delete state.openedAt;
+        await this.saveCircuitState(modelKey, state);
 
         logger.info(
           `${modelKey}: Circuit breaker automatically recovered: OPEN → CLOSED`,
@@ -538,29 +594,56 @@ export class ModelManager {
     return false;
   }
 
-  private getCircuitState(modelKey: string): CircuitBreakerState {
-    if (!this.circuitBreakers.has(modelKey)) {
-      this.circuitBreakers.set(modelKey, {
-        state: CircuitState.CLOSED,
-        failureCount: 0,
-        lastFailureTime: 0,
-      });
+  private async getCircuitState(modelKey: string): Promise<CircuitBreakerState> {
+    const redisStore = await this.getRedisStore();
+    const key = this.getCircuitBreakerKey(modelKey);
+    
+    if (redisStore) {
+      const state = await redisStore.getJSON<CircuitBreakerState>(key);
+      if (state) {
+        return state;
+      }
     }
-    return this.circuitBreakers.get(modelKey)!;
+
+    // Default state (Redis unavailable or no state found)
+    const defaultState: CircuitBreakerState = {
+      state: CircuitState.CLOSED,
+      failureCount: 0,
+      lastFailureTime: 0,
+    };
+    // Try to save, but don't fail if Redis is unavailable
+    if (redisStore) {
+      await this.saveCircuitState(modelKey, defaultState);
+    }
+    return defaultState;
   }
 
-  public recordSuccess(modelKey: string): void {
-    const circuitState = this.getCircuitState(modelKey);
+  private async saveCircuitState(
+    modelKey: string,
+    state: CircuitBreakerState,
+  ): Promise<void> {
+    const redisStore = await this.getRedisStore();
+    if (!redisStore) {
+      return; // Redis unavailable, skip silently
+    }
+    const key = this.getCircuitBreakerKey(modelKey);
+    // Store with expiration of 24 hours (circuit breaker state should persist)
+    await redisStore.setJSON(key, state, 86400);
+  }
+
+  public async recordSuccess(modelKey: string): Promise<void> {
+    const circuitState = await this.getCircuitState(modelKey);
 
     circuitState.state = CircuitState.CLOSED;
     circuitState.failureCount = 0;
     delete circuitState.openedAt;
 
+    await this.saveCircuitState(modelKey, circuitState);
     logger.debug(`${modelKey}: Circuit breaker reset after successful request`);
   }
 
-  public recordFailure(modelKey: string): void {
-    const circuitState = this.getCircuitState(modelKey);
+  public async recordFailure(modelKey: string): Promise<void> {
+    const circuitState = await this.getCircuitState(modelKey);
     const now = Date.now();
 
     circuitState.lastFailureTime = now;
@@ -582,21 +665,42 @@ export class ModelManager {
         },
       );
     }
+
+    await this.saveCircuitState(modelKey, circuitState);
   }
 
   /**
    * Monitoring and observability methods
    */
-  public getCircuitBreakerStatus(): Map<string, CircuitBreakerState> {
-    return new Map(this.circuitBreakers);
-  }
+  public async getCircuitBreakerStatus(): Promise<Map<string, CircuitBreakerState>> {
+    const redisStore = await this.getRedisStore();
+    const statusMap = new Map<string, CircuitBreakerState>();
+    
+    if (!redisStore) {
+      return statusMap; // Redis unavailable, return empty map
+    }
+    
+    const keys = await redisStore.keys(`${this.CIRCUIT_BREAKER_PREFIX}*`);
 
+    for (const key of keys) {
+      const modelKey = key.replace(this.CIRCUIT_BREAKER_PREFIX, "");
+      const state = await redisStore.getJSON<CircuitBreakerState>(key);
+      if (state) {
+        statusMap.set(modelKey, state);
+      }
+    }
+
+    return statusMap;
+  }
 
   /**
    * Cleanup on shutdown
    */
-  public shutdown(): void {
-    this.circuitBreakers.clear();
+  public async shutdown(): Promise<void> {
+    // Note: We don't clear circuit breaker state on shutdown as it should persist
+    // If you want to clear it, uncomment the following:
+    // const redisStore = await this.getRedisStore();
+    // await redisStore.deletePattern(`${this.CIRCUIT_BREAKER_PREFIX}*`);
     logger.info("Shutdown complete");
   }
 }
@@ -612,9 +716,9 @@ export function getModelManager(
   return globalModelManager;
 }
 
-export function resetModelManager(): void {
+export async function resetModelManager(): Promise<void> {
   if (globalModelManager) {
-    globalModelManager.shutdown();
+    await globalModelManager.shutdown();
     globalModelManager = null;
   }
 }

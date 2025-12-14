@@ -41,6 +41,7 @@ import { getActiveTask } from "@openswe/shared/open-swe/tasks";
 import { createPullRequestToolCallMessage } from "../../../utils/message/create-pr-message.js";
 import { filterUnsafeCommands } from "../../../utils/command-evaluation.js";
 import { getRepoAbsolutePath } from "@openswe/shared/git";
+import { getCodebaseTree as getCodebaseTreeFromRedis, setCodebaseTree, setTaskPlan } from "../../../utils/redis-state.js";
 import {
   createReplyToCommentTool,
   createReplyToReviewCommentTool,
@@ -65,8 +66,9 @@ export async function takeAction(
   const searchTool = createGrepTool(state, config);
   const textEditorTool = createTextEditorTool(state, config);
   const installDependenciesTool = createInstallDependenciesTool(state, config);
-  const getURLContentTool = createGetURLContentTool(state);
-  const searchDocumentForTool = createSearchDocumentForTool(state, config);
+  const threadId = config.thread_id;
+  const getURLContentTool = createGetURLContentTool(state, threadId);
+  const searchDocumentForTool = createSearchDocumentForTool(state, config, threadId);
   const mcpTools = await getMcpTools(config);
   const writeDefaultTsConfigTool = createWriteDefaultTsConfigTool(
     state,
@@ -198,6 +200,7 @@ export async function takeAction(
         higherContextLimitToolNames,
         state,
         config,
+        threadId: config.thread_id,
       },
     );
 
@@ -277,11 +280,27 @@ export async function takeAction(
   ]);
 
   const codebaseTree = await getCodebaseTree(config);
-  // If the codebase tree failed to generate, fallback to the previous codebase tree, or if that's not defined, use the failed to generate message.
-  const codebaseTreeToReturn =
-    codebaseTree === FAILED_TO_GENERATE_TREE_MESSAGE
-      ? (state.codebaseTree ?? codebaseTree)
-      : codebaseTree;
+  // If the codebase tree failed to generate, check Redis cache, then fallback to state
+  let codebaseTreeToReturn = codebaseTree;
+  if (codebaseTree === FAILED_TO_GENERATE_TREE_MESSAGE) {
+    if (threadId) {
+      const cachedTree = await getCodebaseTreeFromRedis(threadId);
+      if (cachedTree) {
+        codebaseTreeToReturn = cachedTree;
+      } else if (state.codebaseTree) {
+        codebaseTreeToReturn = state.codebaseTree;
+      } else {
+        codebaseTreeToReturn = codebaseTree;
+      }
+    } else if (state.codebaseTree) {
+      codebaseTreeToReturn = state.codebaseTree;
+    }
+  } else {
+    // Save to Redis if we have threadId
+    if (threadId) {
+      await setCodebaseTree(threadId, codebaseTree);
+    }
+  }
 
   // Prioritize wereDependenciesInstalled over dependenciesInstalled
   const dependenciesInstalledUpdate =
@@ -308,6 +327,11 @@ export async function takeAction(
     wasFiltered && modifiedMessage
       ? [modifiedMessage, ...toolCallResults]
       : toolCallResults;
+
+  // Sync taskPlan to Redis if updated
+  if (updatedTaskPlan && threadId) {
+    await setTaskPlan(threadId, updatedTaskPlan);
+  }
 
   const commandUpdate: GraphUpdate = {
     messages: userFacingMessagesUpdate,

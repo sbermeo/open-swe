@@ -4,29 +4,21 @@ export const MODEL_OPTIONS = [
   //   label: "Claude Sonnet 4 (Extended Thinking)",
   //   value: "anthropic:extended-thinking:claude-sonnet-4-0",
   // },
-  // {
-  //   label: "Claude Opus 4 (Extended Thinking)",
-  //   value: "anthropic:extended-thinking:claude-opus-4-0",
-  // },
   {
-    label: "Claude Sonnet 4.5",
-    value: "anthropic:claude-sonnet-4-5",
+    label: "Claude Sonnet 4.5 (20250929)",
+    value: "anthropic:claude-sonnet-4-5-20250929",
+  },
+  {
+    label: "Claude Sonnet 4.5 (20250929)",
+    value: "anthropic:claude-sonnet-4-5-20250929",
+  },
+  {
+    label: "Claude 3.5 Haiku (20241022)",
+    value: "anthropic:claude-3-5-haiku-20241022",
   },
   {
     label: "Claude Sonnet 4",
     value: "anthropic:claude-sonnet-4-0",
-  },
-  {
-    label: "Claude Opus 4.5",
-    value: "anthropic:claude-opus-4-5",
-  },
-  {
-    label: "Claude Opus 4.1",
-    value: "anthropic:claude-opus-4-1",
-  },
-  {
-    label: "Claude Opus 4",
-    value: "anthropic:claude-opus-4-0",
   },
   {
     label: "Claude 3.7 Sonnet",

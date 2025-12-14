@@ -15,6 +15,7 @@ import {
 } from "@langchain/langgraph/prebuilt";
 import { getSandboxWithErrorHandling } from "../../../utils/sandbox.js";
 import { createNewTask } from "@openswe/shared/open-swe/tasks";
+import { setTaskPlan, setProposedPlan } from "../../../utils/redis-state.js";
 import {
   getInitialUserRequest,
   getRecentUserRequest,
@@ -231,6 +232,11 @@ export async function interruptProposedPlan(
       planItems,
       { existingTaskPlan: state.taskPlan },
     );
+    
+    // Sync taskPlan to Redis
+    if (config.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    }
 
     return await startProgrammerRun({
       runInput: runInput as Exclude<GraphUpdate, "taskPlan"> & {
@@ -320,6 +326,11 @@ export async function interruptProposedPlan(
       planItems,
       { existingTaskPlan: state.taskPlan },
     );
+    
+    // Sync taskPlan to Redis
+    if (config.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    }
 
     // Update the comment to notify the user that the plan was accepted (only if not in local mode)
     if (!isLocalMode(config) && state.githubIssueId) {
@@ -347,6 +358,11 @@ export async function interruptProposedPlan(
       planItems,
       { existingTaskPlan: state.taskPlan },
     );
+    
+    // Sync taskPlan to Redis
+    if (config.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    }
 
     // Update the comment to notify the user that the plan was edited (only if not in local mode)
     if (!isLocalMode(config) && state.githubIssueId) {

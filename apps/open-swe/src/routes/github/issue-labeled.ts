@@ -81,11 +81,11 @@ class IssueWebhookHandler extends WebhookHandlerBase {
         autoAcceptPlan: isAutoAcceptLabel,
       };
 
-      // Create config object with Claude Opus 4.1 model configuration for max labels
+      // Create config object with Claude Sonnet 4.5 model configuration for max labels
       const configurable: Partial<GraphConfig["configurable"]> = isMaxLabel
         ? {
-            plannerModelName: "anthropic:claude-opus-4-1",
-            programmerModelName: "anthropic:claude-opus-4-1",
+            plannerModelName: "anthropic:claude-sonnet-4-5-20250929",
+            programmerModelName: "anthropic:claude-sonnet-4-5-20250929",
           }
         : {};
 

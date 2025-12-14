@@ -4,11 +4,13 @@ import { createGetURLContentToolFields } from "@openswe/shared/open-swe/tools";
 import { FireCrawlLoader } from "@langchain/community/document_loaders/web/firecrawl";
 import { GraphState } from "@openswe/shared/open-swe/types";
 import { parseUrl } from "../utils/url-parser.js";
+import { getDocumentCache, setDocumentCache } from "../utils/redis-state.js";
 
 const logger = createLogger(LogLevel.INFO, "GetURLContentTool");
 
 export function createGetURLContentTool(
   state: Pick<GraphState, "documentCache">,
+  threadId?: string,
 ) {
   const getURLContentTool = tool(
     async (
@@ -27,7 +29,16 @@ export function createGetURLContentTool(
       const parsedUrl = urlParseResult.url?.href;
 
       try {
-        let documentContent = state.documentCache[parsedUrl];
+        // Check Redis cache first, then fallback to state cache
+        let documentContent: string | null = null;
+        if (threadId) {
+          documentContent = await getDocumentCache(threadId, parsedUrl);
+        }
+        
+        // Fallback to state cache if Redis doesn't have it
+        if (!documentContent && state.documentCache[parsedUrl]) {
+          documentContent = state.documentCache[parsedUrl];
+        }
 
         if (!documentContent) {
           logger.info("Document not cached, fetching via FireCrawl", {
@@ -44,15 +55,19 @@ export function createGetURLContentTool(
           const docs = await loader.load();
           documentContent = docs.map((doc) => doc.pageContent).join("\n\n");
 
-          if (state.documentCache) {
-            const stateUpdates = {
-              documentCache: {
-                ...state.documentCache,
-                [parsedUrl]: documentContent,
-              },
-            };
-            return { result: documentContent, status: "success", stateUpdates };
+          // Store in Redis if we have threadId
+          if (threadId) {
+            await setDocumentCache(threadId, parsedUrl, documentContent);
           }
+
+          // Also update state cache for backward compatibility
+          const stateUpdates = {
+            documentCache: {
+              ...state.documentCache,
+              [parsedUrl]: documentContent,
+            },
+          };
+          return { result: documentContent, status: "success", stateUpdates };
         } else {
           logger.info("Using cached document content", {
             url: parsedUrl,

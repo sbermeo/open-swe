@@ -45,11 +45,11 @@ import { Label } from "../ui/label";
 
 const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
   anthropic: {
-    plannerModelName: "anthropic:claude-opus-4-5",
-    programmerModelName: "anthropic:claude-opus-4-5",
-    reviewerModelName: "anthropic:claude-opus-4-5",
-    routerModelName: "anthropic:claude-3-5-haiku-latest",
-    summarizerModelName: "anthropic:claude-opus-4-5",
+    plannerModelName: "anthropic:claude-sonnet-4-5-20250929",
+    programmerModelName: "anthropic:claude-sonnet-4-5-20250929",
+    reviewerModelName: "anthropic:claude-sonnet-4-5-20250929",
+    routerModelName: "anthropic:claude-3-5-haiku-20241022",
+    summarizerModelName: "anthropic:claude-sonnet-4-5-20250929",
   },
   "google-genai": {
     plannerModelName: "google-genai:gemini-2.5-pro",

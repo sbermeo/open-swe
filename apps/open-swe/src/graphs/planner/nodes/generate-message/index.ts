@@ -38,6 +38,7 @@ import { createScratchpadTool } from "../../../../tools/scratchpad.js";
 import { getMcpTools } from "../../../../utils/mcp-client.js";
 import { filterMessagesWithoutContent } from "../../../../utils/message/content.js";
 import { getScratchpad } from "../../utils/scratchpad-notes.js";
+import { getCodebaseTree as getCodebaseTreeFromRedis } from "../../../../utils/redis-state.js";
 import { formatUserRequestPrompt } from "../../../../utils/user-request.js";
 import {
   convertMessagesToCacheControlledMessages,
@@ -46,18 +47,32 @@ import {
 import { createViewTool } from "../../../../tools/builtin-tools/view.js";
 import { shouldCreateIssue } from "../../../../utils/should-create-issue.js";
 import { shouldUseCustomFramework } from "../../../../utils/should-use-custom-framework.js";
+import { Command, interrupt } from "@langchain/langgraph";
+import { ModelFallbackInterruptError } from "../../../../utils/model-fallback-error.js";
+import { HumanInterrupt } from "@langchain/langgraph/prebuilt";
+import { getMessageContentString } from "@openswe/shared/messages";
 
 const logger = createLogger(LogLevel.INFO, "GeneratePlanningMessageNode");
 
-function formatSystemPrompt(
+async function formatSystemPrompt(
   state: PlannerGraphState,
   config: GraphConfig,
-): string {
+): Promise<string> {
   // It's a followup if there's more than one human message.
   const isFollowup = isFollowupRequest(state.taskPlan, state.proposedPlan);
   const scratchpad = getScratchpad(state.messages)
     .map((n) => `- ${n}`)
     .join("\n");
+  
+  // Get codebase tree from Redis or fallback to state
+  let codebaseTree = state.codebaseTree || "No codebase tree generated yet.";
+  if (config.thread_id) {
+    const cachedTree = await getCodebaseTreeFromRedis(config.thread_id);
+    if (cachedTree) {
+      codebaseTree = cachedTree;
+    }
+  }
+  
   return SYSTEM_PROMPT.replace(
     "{FOLLOWUP_MESSAGE_PROMPT}",
     isFollowup
@@ -82,7 +97,7 @@ function formatSystemPrompt(
     )
     .replaceAll(
       "{CODEBASE_TREE}",
-      state.codebaseTree || "No codebase tree generated yet.",
+      codebaseTree,
     )
     .replaceAll("{CUSTOM_RULES}", formatCustomRulesPrompt(state.customRules))
     .replace("{USER_REQUEST_PROMPT}", formatUserRequestPrompt(state.messages))
@@ -112,6 +127,7 @@ export async function generateAction(
   );
   const mcpTools = await getMcpTools(config);
 
+  const threadId = config.thread_id;
   const tools = [
     createGrepTool(state, config),
     createShellTool(state, config),
@@ -119,8 +135,8 @@ export async function generateAction(
     createScratchpadTool(
       "when generating a final plan, after all context gathering is complete",
     ),
-    createGetURLContentTool(state),
-    createSearchDocumentForTool(state, config),
+    createGetURLContentTool(state, threadId),
+    createSearchDocumentForTool(state, config, threadId),
     ...mcpTools,
   ];
   logger.info(
@@ -160,35 +176,70 @@ export async function generateAction(
 
   const inputMessagesWithCache =
     convertMessagesToCacheControlledMessages(inputMessages);
-  const response = await modelWithTools
-    .withConfig({ tags: ["nostream"] })
-    .invoke([
-      {
-        role: "system",
-        content: formatSystemPrompt(
-          {
-            ...state,
-            taskPlan: latestTaskPlan ?? state.taskPlan,
+  
+  try {
+    const response = await modelWithTools
+      .withConfig({ tags: ["nostream"] })
+      .invoke([
+        {
+          role: "system",
+          content: await formatSystemPrompt(
+            {
+              ...state,
+              taskPlan: latestTaskPlan ?? state.taskPlan,
+            },
+            config,
+          ),
+        },
+        ...inputMessagesWithCache,
+      ]);
+
+    logger.info("Generated planning message", {
+      ...(getMessageContentString(response.content) && {
+        content: getMessageContentString(response.content),
+      }),
+      ...response.tool_calls?.map((tc) => ({
+        name: tc.name,
+        args: tc.args,
+      })),
+    });
+
+    return {
+      messages: [...missingMessages, response],
+      ...(latestTaskPlan && { taskPlan: latestTaskPlan }),
+      tokenData: trackCachePerformance(response, modelName),
+    };
+  } catch (error) {
+    // Check if it's a model fallback interrupt error
+    if (error instanceof ModelFallbackInterruptError) {
+      const modelOptions = error.availableModels.map((model) => ({
+        provider: model.provider,
+        modelName: model.modelName,
+        fullName: `${model.provider}:${model.modelName}`,
+      }));
+
+      const modelList = modelOptions.map((m, i) => `${i + 1}. ${m.fullName}`).join("\n");
+      const message = `⚠️ El modelo ${error.failedModel} falló con el siguiente error:\n\n${error.errorMessage}\n\nModelos disponibles:\n${modelList}\n\nPor favor, responde con el nombre completo del modelo que deseas usar (ej: "anthropic:claude-sonnet-4-0"):`;
+
+      // Create interrupt with model selection using ActionRequest
+      throw interrupt({
+        action_request: {
+          action: "Select Fallback Model",
+          args: {
+            failedModel: error.failedModel,
+            errorMessage: error.errorMessage,
+            availableModels: modelOptions,
+            task: error.task,
           },
-          config,
-        ),
-      },
-      ...inputMessagesWithCache,
-    ]);
-
-  logger.info("Generated planning message", {
-    ...(getMessageContentString(response.content) && {
-      content: getMessageContentString(response.content),
-    }),
-    ...response.tool_calls?.map((tc) => ({
-      name: tc.name,
-      args: tc.args,
-    })),
-  });
-
-  return {
-    messages: [...missingMessages, response],
-    ...(latestTaskPlan && { taskPlan: latestTaskPlan }),
-    tokenData: trackCachePerformance(response, modelName),
-  };
+        },
+        config: {
+          allow_respond: true,
+        },
+        description: message,
+      } as HumanInterrupt);
+    }
+    
+    // Re-throw other errors
+    throw error;
+  }
 }

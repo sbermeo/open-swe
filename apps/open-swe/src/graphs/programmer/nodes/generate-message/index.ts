@@ -27,6 +27,7 @@ import { createLogger, LogLevel } from "../../../../utils/logger.js";
 import { getCurrentPlanItem } from "../../../../utils/current-task.js";
 import { getMessageContentString } from "@openswe/shared/messages";
 import { getActivePlanItems } from "@openswe/shared/open-swe/tasks";
+import { getCodebaseTree as getCodebaseTreeFromRedis } from "../../../../utils/redis-state.js";
 import {
   CODE_REVIEW_PROMPT,
   DEPENDENCIES_INSTALLED_PROMPT,
@@ -68,13 +69,26 @@ import {
   createReplyToReviewTool,
 } from "../../../../tools/reply-to-review-comment.js";
 import { shouldUseCustomFramework } from "../../../../utils/should-use-custom-framework.js";
+import { Command, interrupt } from "@langchain/langgraph";
+import { ModelFallbackInterruptError } from "../../../../utils/model-fallback-error.js";
+import { HumanInterrupt } from "@langchain/langgraph/prebuilt";
 
 const logger = createLogger(LogLevel.INFO, "GenerateMessageNode");
 
-const formatDynamicContextPrompt = (state: GraphState) => {
+const formatDynamicContextPrompt = async (state: GraphState, config: GraphConfig) => {
   const planString = getActivePlanItems(state.taskPlan)
     .map((i) => `<plan-item index="${i.index}">\n${i.plan}\n</plan-item>`)
     .join("\n");
+  
+  // Get codebase tree from Redis or fallback to state
+  let codebaseTree = state.codebaseTree || "No codebase tree generated yet.";
+  if (config.thread_id) {
+    const cachedTree = await getCodebaseTreeFromRedis(config.thread_id);
+    if (cachedTree) {
+      codebaseTree = cachedTree;
+    }
+  }
+  
   return DYNAMIC_SYSTEM_PROMPT.replaceAll("{PLAN_PROMPT}", planString)
     .replaceAll(
       "{PLAN_GENERATION_NOTES}",
@@ -89,7 +103,7 @@ const formatDynamicContextPrompt = (state: GraphState) => {
     )
     .replaceAll(
       "{CODEBASE_TREE}",
-      state.codebaseTree || "No codebase tree generated yet.",
+      codebaseTree,
     );
 };
 
@@ -112,15 +126,18 @@ const formatStaticInstructionsPrompt = (
     .replace("{DEV_SERVER_PROMPT}", ""); // Always empty until we add dev server tool
 };
 
-const formatCacheablePrompt = (
+const formatCacheablePrompt = async (
   state: GraphState,
   config: GraphConfig,
   args?: {
     isAnthropicModel?: boolean;
     excludeCacheControl?: boolean;
   },
-): CacheablePromptSegment[] => {
+): Promise<CacheablePromptSegment[]> => {
   const codeReview = getCodeReviewFields(state.internalMessages);
+
+  // Get dynamic context prompt first (async operation)
+  const dynamicContextText = await formatDynamicContextPrompt(state, config);
 
   const segments: CacheablePromptSegment[] = [
     // Cache Breakpoint 2: Static Instructions
@@ -139,7 +156,7 @@ const formatCacheablePrompt = (
     // Cache Breakpoint 3: Dynamic Context
     {
       type: "text",
-      text: formatDynamicContextPrompt(state),
+      text: dynamicContextText,
     },
   ];
 
@@ -193,15 +210,16 @@ async function createToolsAndPrompt(
   providerMessages: Record<Provider, BaseMessageLike[]>;
 }> {
   const mcpTools = await getMcpTools(config);
+  const threadId = config.thread_id;
   const sharedTools = [
     createGrepTool(state, config),
     createShellTool(state, config),
     createRequestHumanHelpToolFields(),
     createUpdatePlanToolFields(),
-    createGetURLContentTool(state),
+    createGetURLContentTool(state, threadId),
     createInstallDependenciesTool(state, config),
     createMarkTaskCompletedToolFields(),
-    createSearchDocumentForTool(state, config),
+    createSearchDocumentForTool(state, config, threadId),
     createWriteDefaultTsConfigTool(state, config),
     ...(shouldIncludeReviewCommentTool(state, config)
       ? [
@@ -220,7 +238,7 @@ async function createToolsAndPrompt(
   const anthropicModelTools = [
     ...sharedTools,
     {
-      type: "text_editor_20250429",
+      type: "text_editor_20250728",
       name: "str_replace_based_edit_tool",
       cache_control: { type: "ephemeral" },
     },
@@ -244,7 +262,7 @@ async function createToolsAndPrompt(
   const anthropicMessages = [
     {
       role: "system",
-      content: formatCacheablePrompt(
+      content: await formatCacheablePrompt(
         {
           ...state,
           taskPlan: options.latestTaskPlan ?? state.taskPlan,
@@ -263,7 +281,7 @@ async function createToolsAndPrompt(
   const nonAnthropicMessages = [
     {
       role: "system",
-      content: formatCacheablePrompt(
+      content: await formatCacheablePrompt(
         {
           ...state,
           taskPlan: options.latestTaskPlan ?? state.taskPlan,
@@ -343,9 +361,45 @@ export async function generateAction(
         : {}),
     },
   );
-  const response = await modelWithTools.invoke(
-    isAnthropicModel ? providerMessages.anthropic : providerMessages.openai,
-  );
+  
+  let response;
+  try {
+    response = await modelWithTools.invoke(
+      isAnthropicModel ? providerMessages.anthropic : providerMessages.openai,
+    );
+  } catch (error) {
+    // Check if it's a model fallback interrupt error
+    if (error instanceof ModelFallbackInterruptError) {
+      const modelOptions = error.availableModels.map((model) => ({
+        provider: model.provider,
+        modelName: model.modelName,
+        fullName: `${model.provider}:${model.modelName}`,
+      }));
+
+      const modelList = modelOptions.map((m, i) => `${i + 1}. ${m.fullName}`).join("\n");
+      const message = `⚠️ El modelo ${error.failedModel} falló con el siguiente error:\n\n${error.errorMessage}\n\nModelos disponibles:\n${modelList}\n\nPor favor, responde con el nombre completo del modelo que deseas usar (ej: "anthropic:claude-sonnet-4-0"):`;
+
+      // Create interrupt with model selection using ActionRequest
+      throw interrupt({
+        action_request: {
+          action: "Select Fallback Model",
+          args: {
+            failedModel: error.failedModel,
+            errorMessage: error.errorMessage,
+            availableModels: modelOptions,
+            task: error.task,
+          },
+        },
+        config: {
+          allow_respond: true,
+        },
+        description: message,
+      } as HumanInterrupt);
+    }
+    
+    // Re-throw other errors
+    throw error;
+  }
 
   const hasToolCalls = !!response.tool_calls?.length;
   // No tool calls means the graph is going to end. Stop the sandbox.

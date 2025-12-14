@@ -75,11 +75,6 @@ function getModelPricingPlaceholder(model: string): {
     { inputPrice: number; outputPrice: number; cachePrice: number }
   > = {
     // Claude 4 models
-    "anthropic:claude-4-opus": {
-      inputPrice: 15.0,
-      outputPrice: 75.0,
-      cachePrice: 1.5,
-    },
     "anthropic:claude-4-sonnet": {
       inputPrice: 3.0,
       outputPrice: 15.0,
@@ -90,9 +85,14 @@ function getModelPricingPlaceholder(model: string): {
       outputPrice: 15.0,
       cachePrice: 0.3,
     },
-    "anthropic:claude-opus-4-5": {
-      inputPrice: 5.0,
-      outputPrice: 25.0,
+    // "anthropic:claude-sonnet-4-5-20251101": {
+    //   inputPrice: 3.0,
+    //   outputPrice: 15.0,
+    //   cachePrice: 0.3,
+    // },
+    "anthropic:claude-sonnet-4-5-20250929": {
+      inputPrice: 3.0,
+      outputPrice: 15.0,
       cachePrice: 0.3,
     },
 
@@ -121,11 +121,6 @@ function getModelPricingPlaceholder(model: string): {
     },
 
     // Claude 3 models
-    "anthropic:claude-3-opus-20240229": {
-      inputPrice: 15.0,
-      outputPrice: 75.0,
-      cachePrice: 1.5,
-    },
     "anthropic:claude-3-haiku-20240307": {
       inputPrice: 0.25,
       outputPrice: 1.25,

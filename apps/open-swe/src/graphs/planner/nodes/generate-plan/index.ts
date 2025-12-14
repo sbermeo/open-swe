@@ -31,6 +31,7 @@ import { filterMessagesWithoutContent } from "../../../../utils/message/content.
 import { getModelManager } from "../../../../utils/llms/model-manager.js";
 import { trackCachePerformance } from "../../../../utils/caching.js";
 import { isLocalMode } from "@openswe/shared/open-swe/local-mode";
+import { setProposedPlan } from "../../../../utils/redis-state.js";
 
 function formatSystemPrompt(
   state: PlannerGraphState,
@@ -151,6 +152,11 @@ export async function generatePlan(
     content: "Successfully saved plan.",
     name: sessionPlanTool.name,
   });
+
+  // Sync proposedPlan to Redis
+  if (config.thread_id) {
+    await setProposedPlan(config.thread_id, proposedPlanArgs.plan);
+  }
 
   return {
     messages: [response, toolResponse],
