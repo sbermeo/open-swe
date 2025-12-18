@@ -16,8 +16,9 @@ import {
   summarizeHistory,
   handleCompletedTask,
 } from "./nodes/index.js";
-import { BaseMessage, isAIMessage } from "@langchain/core/messages";
+import { BaseMessage, isAIMessage, isHumanMessage } from "@langchain/core/messages";
 import { initializeSandbox } from "../shared/initialize-sandbox.js";
+import { checkpointer } from "../../utils/postgres-checkpointer.js";
 import { graph as reviewerGraph } from "../reviewer/index.js";
 import { getRemainingPlanItems } from "../../utils/current-task.js";
 import { getActivePlanItems } from "@openswe/shared/open-swe/tasks";
@@ -58,7 +59,7 @@ function routeGeneratedAction(
   const lastMessage = internalMessages[internalMessages.length - 1];
   
   // Check if the last message is a model selection response (after interrupt)
-  if (lastMessage.role === "human") {
+  if (isHumanMessage(lastMessage)) {
     const content = typeof lastMessage.content === "string" 
       ? lastMessage.content 
       : Array.isArray(lastMessage.content)
@@ -203,5 +204,5 @@ const workflow = new StateGraph(GraphAnnotation, GraphConfiguration)
   .addEdge("open-pr", END);
 
 // Zod types are messed up
-export const graph = workflow.compile() as any;
+export const graph = workflow.compile({ checkpointer }) as any;
 graph.name = "Open SWE - Programmer";

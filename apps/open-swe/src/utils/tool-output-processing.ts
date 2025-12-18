@@ -58,8 +58,14 @@ export async function processToolCallContent(
       };
     }
 
+    // Force truncation for MCP outputs too, but with higher limit
+    const truncatedResult = truncateOutput(result, {
+      numStartCharacters: 50000,
+      numEndCharacters: 50000,
+    });
+
     const processedContent = await handleMcpDocumentationOutput(
-      result,
+      truncatedResult,
       config,
       {
         url: parsedUrl,
@@ -69,14 +75,14 @@ export async function processToolCallContent(
     // Store in Redis if we have threadId, otherwise use state cache
     if (parsedUrl) {
       if (threadId) {
-        await setDocumentCache(threadId, parsedUrl, result);
+        await setDocumentCache(threadId, parsedUrl, truncatedResult);
       }
       
       // Also update state cache for backward compatibility
       const stateUpdates = {
         documentCache: {
           ...state.documentCache,
-          [parsedUrl]: result,
+          [parsedUrl]: truncatedResult,
         },
       };
 
@@ -90,8 +96,12 @@ export async function processToolCallContent(
       content: processedContent,
     };
   } else {
+    // Aggressive truncation for all other generic tool outputs
     return {
-      content: truncateOutput(result),
+      content: truncateOutput(result, {
+        numStartCharacters: 5000, // Standard tools shouldn't return books
+        numEndCharacters: 2000,
+      }),
     };
   }
 }

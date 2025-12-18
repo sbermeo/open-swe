@@ -50,7 +50,6 @@ import { shouldUseCustomFramework } from "../../../../utils/should-use-custom-fr
 import { Command, interrupt } from "@langchain/langgraph";
 import { ModelFallbackInterruptError } from "../../../../utils/model-fallback-error.js";
 import { HumanInterrupt } from "@langchain/langgraph/prebuilt";
-import { getMessageContentString } from "@openswe/shared/messages";
 
 const logger = createLogger(LogLevel.INFO, "GeneratePlanningMessageNode");
 
@@ -66,8 +65,8 @@ async function formatSystemPrompt(
   
   // Get codebase tree from Redis or fallback to state
   let codebaseTree = state.codebaseTree || "No codebase tree generated yet.";
-  if (config.thread_id) {
-    const cachedTree = await getCodebaseTreeFromRedis(config.thread_id);
+  if (config.configurable?.thread_id) {
+    const cachedTree = await getCodebaseTreeFromRedis(config.configurable?.thread_id);
     if (cachedTree) {
       codebaseTree = cachedTree;
     }
@@ -127,7 +126,7 @@ export async function generateAction(
   );
   const mcpTools = await getMcpTools(config);
 
-  const threadId = config.thread_id;
+  const threadId = config.configurable?.thread_id;
   const tools = [
     createGrepTool(state, config),
     createShellTool(state, config),
@@ -178,37 +177,37 @@ export async function generateAction(
     convertMessagesToCacheControlledMessages(inputMessages);
   
   try {
-    const response = await modelWithTools
-      .withConfig({ tags: ["nostream"] })
-      .invoke([
-        {
-          role: "system",
+  const response = await modelWithTools
+    .withConfig({ tags: ["nostream"] })
+    .invoke([
+      {
+        role: "system",
           content: await formatSystemPrompt(
-            {
-              ...state,
-              taskPlan: latestTaskPlan ?? state.taskPlan,
-            },
-            config,
-          ),
-        },
-        ...inputMessagesWithCache,
-      ]);
+          {
+            ...state,
+            taskPlan: latestTaskPlan ?? state.taskPlan,
+          },
+          config,
+        ),
+      },
+      ...inputMessagesWithCache,
+    ]);
 
-    logger.info("Generated planning message", {
-      ...(getMessageContentString(response.content) && {
-        content: getMessageContentString(response.content),
-      }),
-      ...response.tool_calls?.map((tc) => ({
-        name: tc.name,
-        args: tc.args,
-      })),
-    });
+  logger.info("Generated planning message", {
+    ...(getMessageContentString(response.content) && {
+      content: getMessageContentString(response.content),
+    }),
+    ...response.tool_calls?.map((tc) => ({
+      name: tc.name,
+      args: tc.args,
+    })),
+  });
 
-    return {
-      messages: [...missingMessages, response],
-      ...(latestTaskPlan && { taskPlan: latestTaskPlan }),
-      tokenData: trackCachePerformance(response, modelName),
-    };
+  return {
+    messages: [...missingMessages, response],
+    ...(latestTaskPlan && { taskPlan: latestTaskPlan }),
+    tokenData: trackCachePerformance(response, modelName),
+  };
   } catch (error) {
     // Check if it's a model fallback interrupt error
     if (error instanceof ModelFallbackInterruptError) {
@@ -232,11 +231,13 @@ export async function generateAction(
             task: error.task,
           },
         },
+        
         config: {
           allow_respond: true,
+          allow_edit: false,
+          allow_accept: false,
         },
-        description: message,
-      } as HumanInterrupt);
+       }) as HumanInterrupt;
     }
     
     // Re-throw other errors

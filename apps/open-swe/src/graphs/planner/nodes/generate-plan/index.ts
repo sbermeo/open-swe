@@ -46,8 +46,8 @@ function formatSystemPrompt(
     "{FOLLOWUP_MESSAGE_PROMPT}",
     isFollowup
       ? "\n" +
-          formatFollowupMessagePrompt(state.taskPlan, state.proposedPlan) +
-          "\n\n"
+      formatFollowupMessagePrompt(state.taskPlan, state.proposedPlan) +
+      "\n\n"
       : "",
   )
     .replace("{USER_REQUEST_PROMPT}", formatUserRequestPrompt(state.messages))
@@ -80,8 +80,8 @@ export async function generatePlan(
     tool_choice: sessionPlanTool.name,
     ...(modelSupportsParallelToolCallsParam
       ? {
-          parallel_tool_calls: false,
-        }
+        parallel_tool_calls: false,
+      }
       : {}),
   });
 
@@ -133,7 +133,17 @@ export async function generatePlan(
 
   const toolCall = response.tool_calls?.[0];
   if (!toolCall) {
-    throw new Error("Failed to generate plan");
+    // Log the response for debugging
+    console.error("[generatePlan] No tool_calls in response:", {
+      response_content: response.content,
+      tool_calls: response.tool_calls,
+      response_type: response.constructor.name,
+    });
+    throw new Error(
+      `Failed to generate plan: Model did not return a tool call. ` +
+      `Response content: ${response.content || "empty"}. ` +
+      `Tool calls: ${response.tool_calls?.length || 0}`
+    );
   }
 
   let newSessionId: string | undefined;
@@ -153,9 +163,11 @@ export async function generatePlan(
     name: sessionPlanTool.name,
   });
 
+
   // Sync proposedPlan to Redis
-  if (config.thread_id) {
-    await setProposedPlan(config.thread_id, proposedPlanArgs.plan);
+  const threadId = config.configurable?.thread_id;
+  if (threadId) {
+    await setProposedPlan(threadId, proposedPlanArgs.plan);
   }
 
   return {

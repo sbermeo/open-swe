@@ -81,6 +81,7 @@ Given all of this, please respond with the concise conclusion. Do not include an
 
   // Update the github issue to include the new overall task summary (only if not in local mode)
   if (!isLocalMode(config) && state.githubIssueId) {
+    try {
     await addTaskPlanToIssue(
       {
         githubIssueId: state.githubIssueId,
@@ -89,6 +90,12 @@ Given all of this, please respond with the concise conclusion. Do not include an
       config,
       updatedTaskPlan,
     );
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with final conclusion. Continuing.",
+        { error },
+      );
+    }
   }
 
   const graphUpdate: GraphUpdate = {

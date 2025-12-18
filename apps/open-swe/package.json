@@ -26,10 +26,12 @@
   "dependencies": {
     "@daytonaio/sdk": "^0.25.5",
     "@langchain/anthropic": "^0.3.26",
+    "@langchain/aws": "^1.1.0",
     "@langchain/community": "^0.3.47",
     "@langchain/core": "^0.3.65",
     "@langchain/google-genai": "^0.2.9",
     "@langchain/langgraph": "^0.3.8",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.0",
     "@langchain/langgraph-sdk": "^0.0.95",
     "@langchain/mcp-adapters": "^0.5.2",
     "@langchain/openai": "^0.5.10",
@@ -45,6 +47,7 @@
     "jsonwebtoken": "^9.0.2",
     "langchain": "^0.3.26",
     "langsmith": "^0.3.29",
+    "pg": "^8.16.3",
     "uuid": "^11.0.5",
     "zod": "^3.25.32"
   },
@@ -59,6 +62,7 @@
     "@types/jest": "^29.5.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.13.5",
+    "@types/pg": "^8.16.0",
     "commander": "^14.0.0",
     "dotenv": "^16.4.7",
     "eslint": "^9.19.0",

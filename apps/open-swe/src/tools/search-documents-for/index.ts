@@ -71,13 +71,13 @@ export function createSearchDocumentForTool(
           }
 
           // Also update state cache for backward compatibility
-          const stateUpdates = {
-            documentCache: {
-              ...state.documentCache,
-              [parsedUrl]: documentContent,
-            },
-          };
-          return { result: documentContent, status: "success", stateUpdates };
+            const stateUpdates = {
+              documentCache: {
+                ...state.documentCache,
+                [parsedUrl]: documentContent,
+              },
+            };
+            return { result: documentContent, status: "success", stateUpdates };
         } else {
           logger.info("Using cached document content", {
             url: parsedUrl,

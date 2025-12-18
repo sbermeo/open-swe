@@ -11,14 +11,14 @@ let redisClient: RedisClientType | null = null;
  */
 export async function getRedisClient(): Promise<RedisClientType | null> {
   try {
-    if (redisClient && redisClient.isOpen) {
-      return redisClient;
-    }
+  if (redisClient && redisClient.isOpen) {
+    return redisClient;
+  }
 
-    const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-    
-    redisClient = createClient({
-      url: redisUrl,
+  const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+  
+  redisClient = createClient({
+    url: redisUrl,
       socket: {
         reconnectStrategy: (retries) => {
           if (retries > 3) {
@@ -29,34 +29,34 @@ export async function getRedisClient(): Promise<RedisClientType | null> {
         },
         connectTimeout: 2000, // 2 second timeout
       },
-    });
+  });
 
-    redisClient.on("error", (err) => {
-      logger.error("Redis Client Error", err);
-    });
+  redisClient.on("error", (err) => {
+    logger.error("Redis Client Error", err);
+  });
 
-    redisClient.on("connect", () => {
-      logger.info("Redis Client Connected");
-    });
+  redisClient.on("connect", () => {
+    logger.info("Redis Client Connected");
+  });
 
-    redisClient.on("ready", () => {
-      logger.info("Redis Client Ready");
-    });
+  redisClient.on("ready", () => {
+    logger.info("Redis Client Ready");
+  });
 
-    redisClient.on("reconnecting", () => {
-      logger.info("Redis Client Reconnecting");
-    });
+  redisClient.on("reconnecting", () => {
+    logger.info("Redis Client Reconnecting");
+  });
 
-    if (!redisClient.isOpen) {
+  if (!redisClient.isOpen) {
       await Promise.race([
         redisClient.connect(),
         new Promise<void>((_, reject) => 
           setTimeout(() => reject(new Error("Redis connection timeout")), 2000)
         )
       ]);
-    }
+  }
 
-    return redisClient;
+  return redisClient;
   } catch (error) {
     logger.warn("Redis unavailable, using fallback to in-memory storage", { error });
     redisClient = null;

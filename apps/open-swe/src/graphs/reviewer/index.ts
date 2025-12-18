@@ -13,6 +13,7 @@ import {
 import { isAIMessage } from "@langchain/core/messages";
 import { diagnoseError } from "../shared/diagnose-error.js";
 
+import { checkpointer } from "../../utils/postgres-checkpointer.js";
 function takeReviewActionsOrFinalReview(
   state: ReviewerGraphState,
 ): "take-review-actions" | "final-review" {
@@ -49,5 +50,5 @@ const workflow = new StateGraph(ReviewerGraphStateObj, GraphConfiguration)
   .addEdge("diagnose-reviewer-error", "generate-review-actions")
   .addEdge("final-review", END);
 
-export const graph = workflow.compile();
+export const graph = workflow.compile({ checkpointer });
 graph.name = "Open SWE - Reviewer";

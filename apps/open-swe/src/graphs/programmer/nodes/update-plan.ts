@@ -221,6 +221,7 @@ export async function updatePlan(
   );
   if (!isLocalMode(config) && shouldCreateIssue(config)) {
     // Update the github issue to reflect the changes in the plan
+    try {
     await addTaskPlanToIssue(
       {
         githubIssueId: state.githubIssueId,
@@ -229,6 +230,12 @@ export async function updatePlan(
       config,
       newTaskPlan,
     );
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with task plan during plan update. Continuing.",
+        { error },
+      );
+    }
   }
 
   const toolMessage = new ToolMessage({

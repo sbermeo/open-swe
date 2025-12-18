@@ -16,6 +16,25 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: open-swe-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: openswe
+      POSTGRES_PASSWORD: openswepassword
+      POSTGRES_DB: openswe_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openswe -d openswe_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   redis-data:
+  postgres-data:
 

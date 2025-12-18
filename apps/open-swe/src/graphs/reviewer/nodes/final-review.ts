@@ -194,6 +194,7 @@ export async function finalReview(
   );
 
   if (!isLocalMode(config) && shouldCreateIssue(config)) {
+    try {
     await addTaskPlanToIssue(
       {
         githubIssueId: state.githubIssueId,
@@ -202,6 +203,12 @@ export async function finalReview(
       config,
       updatedTaskPlan,
     );
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with task plan during review. Continuing.",
+        { error },
+      );
+    }
   } else {
     logger.info("Skipping GitHub issue update in local mode");
   }

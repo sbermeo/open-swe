@@ -66,7 +66,7 @@ export async function takeAction(
   const searchTool = createGrepTool(state, config);
   const textEditorTool = createTextEditorTool(state, config);
   const installDependenciesTool = createInstallDependenciesTool(state, config);
-  const threadId = config.thread_id;
+  const threadId = config.configurable?.thread_id;
   const getURLContentTool = createGetURLContentTool(state, threadId);
   const searchDocumentForTool = createSearchDocumentForTool(state, config, threadId);
   const mcpTools = await getMcpTools(config);
@@ -200,7 +200,7 @@ export async function takeAction(
         higherContextLimitToolNames,
         state,
         config,
-        threadId: config.thread_id,
+        threadId: config.configurable?.thread_id,
       },
     );
 

@@ -82,8 +82,8 @@ const formatDynamicContextPrompt = async (state: GraphState, config: GraphConfig
   
   // Get codebase tree from Redis or fallback to state
   let codebaseTree = state.codebaseTree || "No codebase tree generated yet.";
-  if (config.thread_id) {
-    const cachedTree = await getCodebaseTreeFromRedis(config.thread_id);
+  if (config.configurable?.thread_id) {
+    const cachedTree = await getCodebaseTreeFromRedis(config.configurable?.thread_id);
     if (cachedTree) {
       codebaseTree = cachedTree;
     }
@@ -210,7 +210,7 @@ async function createToolsAndPrompt(
   providerMessages: Record<Provider, BaseMessageLike[]>;
 }> {
   const mcpTools = await getMcpTools(config);
-  const threadId = config.thread_id;
+  const threadId = config.configurable?.thread_id;
   const sharedTools = [
     createGrepTool(state, config),
     createShellTool(state, config),
@@ -365,8 +365,8 @@ export async function generateAction(
   let response;
   try {
     response = await modelWithTools.invoke(
-      isAnthropicModel ? providerMessages.anthropic : providerMessages.openai,
-    );
+    isAnthropicModel ? providerMessages.anthropic : providerMessages.openai,
+  );
   } catch (error) {
     // Check if it's a model fallback interrupt error
     if (error instanceof ModelFallbackInterruptError) {
@@ -392,9 +392,11 @@ export async function generateAction(
         },
         config: {
           allow_respond: true,
+          allow_ignore: false,
+          allow_edit: false,
+          allow_accept: false,
         },
-        description: message,
-      } as HumanInterrupt);
+      }) as HumanInterrupt;
     }
     
     // Re-throw other errors

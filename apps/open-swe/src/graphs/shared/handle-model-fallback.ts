@@ -6,6 +6,7 @@ import { GraphState } from "@openswe/shared/open-swe/types";
 import { createLogger, LogLevel } from "../../utils/logger.js";
 import { LLMTask } from "@openswe/shared/open-swe/llm-task";
 import { getMessageContentString } from "@openswe/shared/messages";
+import { isHumanMessage } from "@langchain/core/messages";
 
 const logger = createLogger(LogLevel.INFO, "HandleModelFallback");
 
@@ -35,7 +36,7 @@ export async function handleModelFallback(
     }
   }
   
-  if (lastMessage.role === "human") {
+  if (isHumanMessage(lastMessage)) {
     const content = getMessageContentString(lastMessage.content);
     selectedModel = content.trim();
   }
@@ -59,8 +60,8 @@ export async function handleModelFallback(
   
   // Return command to continue with updated config
   return new Command({
+    goto: "generate-action",
     update: {
-      // Add a message indicating the model was changed
       messages: [
         {
           role: "assistant",
@@ -68,11 +69,12 @@ export async function handleModelFallback(
         } as any,
       ],
     } as GraphUpdate,
-    config: {
-      configurable: {
-        [taskKey]: selectedModel,
-      },
-    },
+    // Eliminar este bloque:
+    // config: {
+    //   configurable: {
+    //     [taskKey]: selectedModel,
+    //   },
+    // },
   });
 }
 

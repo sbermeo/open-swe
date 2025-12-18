@@ -75,7 +75,7 @@ const formatPrompt = (state: PlannerGraphState): string => {
     )
     .replace(
       "{PROPOSED_PLAN}",
-      state.proposedPlan.map((p) => `  - ${p}`).join("\n"),
+      (state.proposedPlan || []).map((p) => `  - ${p}`).join("\n"),
     )
     .replaceAll(
       "{CUSTOM_RULES}",

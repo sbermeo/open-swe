@@ -8,6 +8,7 @@ import {
   createNewSession,
 } from "./nodes/index.js";
 
+import { checkpointer } from "../../utils/postgres-checkpointer.js";
 const workflow = new StateGraph(ManagerGraphStateObj, GraphConfiguration)
   .addNode("initialize-github-issue", initializeGithubIssue)
   .addNode("classify-message", classifyMessage, {
@@ -20,5 +21,5 @@ const workflow = new StateGraph(ManagerGraphStateObj, GraphConfiguration)
   .addEdge("create-new-session", END)
   .addEdge("start-planner", END);
 
-export const graph = workflow.compile();
+export const graph = workflow.compile({ checkpointer });
 graph.name = "Open SWE - Manager";

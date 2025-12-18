@@ -152,14 +152,21 @@ async function startProgrammerRun(input: {
 
   // Skip GitHub operations in local mode
   if (!isLocalMode(config) && shouldCreateIssue(config)) {
-    await addTaskPlanToIssue(
-      {
-        githubIssueId: state.githubIssueId,
-        targetRepository: state.targetRepository,
-      },
-      config,
-      runInput.taskPlan,
-    );
+    try {
+      await addTaskPlanToIssue(
+        {
+          githubIssueId: state.githubIssueId,
+          targetRepository: state.targetRepository,
+        },
+        config,
+        runInput.taskPlan,
+      );
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with task plan. Continuing execution.",
+        { error },
+      );
+    }
   }
 
   return new Command({
@@ -181,14 +188,21 @@ export async function interruptProposedPlan(
   config: GraphConfig,
 ): Promise<Command> {
   const { proposedPlan } = state;
-  if (!proposedPlan.length) {
-    throw new Error("No proposed plan found.");
+  // Fallback to empty array if undefined to prevent crashes on state corruption
+  const safeProposedPlan = proposedPlan || [];
+  
+  if (!safeProposedPlan.length) {
+    logger.warn("No proposed plan found in state. Redirecting to plan regeneration.");
+    // Instead of throwing, we loop back to generate-plan to try again
+    return new Command({
+      goto: "generate-plan",
+    });
   }
 
   logger.info("Interrupting proposed plan", {
     autoAcceptPlan: state.autoAcceptPlan,
     isLocalMode: isLocalMode(config),
-    proposedPlanLength: proposedPlan.length,
+    proposedPlanLength: safeProposedPlan.length,
     proposedPlanTitle: state.proposedPlanTitle,
   });
 
@@ -216,12 +230,12 @@ export async function interruptProposedPlan(
       await postGitHubIssueComment({
         githubIssueId: state.githubIssueId,
         targetRepository: state.targetRepository,
-        commentBody: `### 🤖 Plan Generated\n\nI've generated a plan for this issue and will proceed to implement it since auto-accept is enabled.\n\n**Plan: ${state.proposedPlanTitle}**\n\n${proposedPlan.map((step, index) => `- Task ${index + 1}:\n${cleanTaskItems(step)}`).join("\n")}\n\nProceeding to implementation...`,
+        commentBody: `### 🤖 Plan Generated\n\nI've generated a plan for this issue and will proceed to implement it since auto-accept is enabled.\n\n**Plan: ${state.proposedPlanTitle}**\n\n${safeProposedPlan.map((step, index) => `- Task ${index + 1}:\n${cleanTaskItems(step)}`).join("\n")}\n\nProceeding to implementation...`,
         config,
       });
     }
 
-    planItems = proposedPlan.map((p, index) => ({
+    planItems = safeProposedPlan.map((p, index) => ({
       index,
       plan: p,
       completed: false,
@@ -234,8 +248,8 @@ export async function interruptProposedPlan(
     );
     
     // Sync taskPlan to Redis
-    if (config.thread_id && runInput.taskPlan) {
-      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    if (config.configurable?.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.configurable?.thread_id, runInput.taskPlan);
     }
 
     return await startProgrammerRun({
@@ -256,22 +270,29 @@ export async function interruptProposedPlan(
   }
 
   if (!isLocalMode(config) && state.githubIssueId) {
-    await addProposedPlanToIssue(
-      {
+    try {
+      await addProposedPlanToIssue(
+        {
+          githubIssueId: state.githubIssueId,
+          targetRepository: state.targetRepository,
+        },
+        config,
+        safeProposedPlan,
+      );
+
+      // Post comment to GitHub issue about plan being ready for approval
+      await postGitHubIssueComment({
         githubIssueId: state.githubIssueId,
         targetRepository: state.targetRepository,
-      },
-      config,
-      proposedPlan,
-    );
-
-    // Post comment to GitHub issue about plan being ready for approval
-    await postGitHubIssueComment({
-      githubIssueId: state.githubIssueId,
-      targetRepository: state.targetRepository,
-      commentBody: `### 🟠 Plan Ready for Approval 🟠\n\nI've generated a plan for this issue and it's ready for your review.\n\n**Plan: ${state.proposedPlanTitle}**\n\n${proposedPlan.map((step, index) => `- Task ${index + 1}:\n${cleanTaskItems(step)}`).join("\n")}\n\nPlease review the plan and let me know if you'd like me to proceed, make changes, or if you have any feedback.`,
-      config,
-    });
+        commentBody: `### 🟠 Plan Ready for Approval 🟠\n\nI've generated a plan for this issue and it's ready for your review.\n\n**Plan: ${state.proposedPlanTitle}**\n\n${safeProposedPlan.map((step, index) => `- Task ${index + 1}:\n${cleanTaskItems(step)}`).join("\n")}\n\nPlease review the plan and let me know if you'd like me to proceed, make changes, or if you have any feedback.`,
+        config,
+      });
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with proposed plan. Continuing execution.",
+        { error },
+      );
+    }
   }
 
   const interruptResponse = interrupt<
@@ -281,7 +302,7 @@ export async function interruptProposedPlan(
     action_request: {
       action: PLAN_INTERRUPT_ACTION_TITLE,
       args: {
-        plan: proposedPlan.join(`\n${PLAN_INTERRUPT_DELIMITER}\n`),
+        plan: safeProposedPlan.join(`\n${PLAN_INTERRUPT_DELIMITER}\n`),
       },
     },
     config: {
@@ -314,7 +335,7 @@ export async function interruptProposedPlan(
   }
 
   if (humanResponse.type === "accept") {
-    planItems = proposedPlan.map((p, index) => ({
+    planItems = safeProposedPlan.map((p, index) => ({
       index,
       plan: p,
       completed: false,
@@ -328,8 +349,8 @@ export async function interruptProposedPlan(
     );
     
     // Sync taskPlan to Redis
-    if (config.thread_id && runInput.taskPlan) {
-      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    if (config.configurable?.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.configurable?.thread_id, runInput.taskPlan);
     }
 
     // Update the comment to notify the user that the plan was accepted (only if not in local mode)
@@ -360,8 +381,8 @@ export async function interruptProposedPlan(
     );
     
     // Sync taskPlan to Redis
-    if (config.thread_id && runInput.taskPlan) {
-      await setTaskPlan(config.thread_id, runInput.taskPlan);
+    if (config.configurable?.thread_id && runInput.taskPlan) {
+      await setTaskPlan(config.configurable?.thread_id, runInput.taskPlan);
     }
 
     // Update the comment to notify the user that the plan was edited (only if not in local mode)

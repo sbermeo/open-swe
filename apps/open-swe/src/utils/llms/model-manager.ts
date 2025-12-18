@@ -2,6 +2,7 @@ import {
   ConfigurableModel,
   initChatModel,
 } from "langchain/chat_models/universal";
+import { BedrockChat } from "@langchain/community/chat_models/bedrock";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { GraphConfig } from "@openswe/shared/open-swe/types";
 import { createLogger, LogLevel } from "../logger.js";
@@ -49,6 +50,7 @@ export const PROVIDER_FALLBACK_ORDER = [
   "openai",
   "anthropic",
   "google-genai",
+  "bedrock",
 ] as const;
 export type Provider = (typeof PROVIDER_FALLBACK_ORDER)[number];
 
@@ -84,6 +86,9 @@ const providerToApiKey = (
       return apiKeys.anthropicApiKey;
     case "google-genai":
       return apiKeys.googleApiKey;
+    case "bedrock":
+      // Bedrock uses AWS credentials, not API keys
+      return "";
     default:
       throw new Error(`Unknown provider: ${providerName}`);
   }
@@ -159,6 +164,7 @@ export class ModelManager {
       "openai": process.env.OPENAI_API_KEY || "",
       "anthropic": process.env.ANTHROPIC_API_KEY || "",
       "google-genai": process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "",
+      "bedrock": "", // Bedrock uses AWS credentials
     };
 
     const envApiKey = envApiKeyMap[provider];
@@ -228,23 +234,23 @@ export class ModelManager {
       ...(apiKey ? { apiKey } : {}),
       ...(thinkingModel && provider === "anthropic"
         ? {
-            thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
-            maxTokens: thinkingMaxTokens,
+          thinking: { budget_tokens: thinkingBudgetTokens, type: "enabled" },
+          maxTokens: thinkingMaxTokens,
             // Don't set temperature for thinking models - let Anthropic use defaults
-          }
+        }
         : correctedModelName.includes("gpt-5")
           ? {
-              max_completion_tokens: finalMaxTokens,
-              temperature: 1,
-            }
+            max_completion_tokens: finalMaxTokens,
+            temperature: 1,
+          }
           : {
-              maxTokens: finalMaxTokens,
+            maxTokens: finalMaxTokens,
               // [CRITICAL FIX] DO NOT SEND TEMPERATURE FOR ANTHROPIC MODELS
               // Sending temperature (even 0 or 1e-7) triggers issues with top_p defaults
               temperature: (provider === "anthropic") 
                 ? undefined 
                 : (temperature !== undefined && !thinkingModel ? temperature : undefined),
-            }),
+          }),
     };
 
     // [CRITICAL FIX] For Anthropic models, use top_p=0 and DELETE temperature.
@@ -267,7 +273,7 @@ export class ModelManager {
 
     const fullModelName = `${provider}:${correctedModelName}`;
     logger.info(`Initializing model: ${fullModelName} (provider: ${provider}, task config)`);
-    
+
     // [DEBUG] Log completo para inspeccionar el request antes de enviarlo
     console.log("----------------------------------------------------------------");
     console.log(`[DEBUG REQUEST] Configuración para ${fullModelName}:`);
@@ -276,9 +282,92 @@ export class ModelManager {
 
     let initializedModel;
 
-    // [CRITICAL FIX] Use ChatAnthropic directly to avoid initChatModel default logic 
-    // which incorrectly sets top_p: -1 for temperature: 0
-    if (provider === "anthropic") {
+    // Initialize Bedrock model
+    if (provider === "bedrock") {
+        const region = process.env.AWS_REGION || "us-east-1";
+        const regionPrefix = region.startsWith("us") ? "us" : region.split("-")[0];
+        // [BEDROCK FIX] Replace old Claude 4.5 models that require inference profiles
+        // with Claude 3.5 models that support on-demand directly
+        let finalModelName = correctedModelName;
+        // Bedrock requires inference profiles for Claude models
+        // Inference profiles use format: {region}.anthropic.{model-id}
+        // For us-east-1, we use "us.anthropic.{model-id}"
+        
+        const bedrockModelMappings: Record<string, string> = {
+          // Map to inference profiles with regional prefix
+          "anthropic.claude-haiku-4-5-20251001-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "anthropic.claude-sonnet-4-5-20250929-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "anthropic.claude-opus-4-5-20251101-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "us.anthropic.claude-haiku-4-5-20251001-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "us.anthropic.claude-sonnet-4-5-20250929-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "us.anthropic.claude-opus-4-5-20251101-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          // Also map Claude 3.5 models to inference profiles
+          "anthropic.claude-3-5-haiku-20241022-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+          "anthropic.claude-3-5-sonnet-20240620-v1:0": `${regionPrefix}.anthropic.claude-3-5-haiku-20241022-v1:0`,
+        };
+        
+        if (bedrockModelMappings[correctedModelName]) {
+          logger.warn(`[BEDROCK] Replacing unsupported model ${correctedModelName} with ${bedrockModelMappings[correctedModelName]}`);
+          finalModelName = bedrockModelMappings[correctedModelName];
+        } else if (correctedModelName.startsWith("anthropic.claude") && !correctedModelName.match(/^(us|eu|ap)\.anthropic\./)) {
+          // Convert Claude model to inference profile format (add regional prefix)
+          logger.info(`[BEDROCK] Converting Claude model to inference profile: ${correctedModelName} -> ${regionPrefix}.${correctedModelName}`);
+          finalModelName = `${regionPrefix}.${correctedModelName}`;
+        }
+        
+        logger.info(`Using BedrockChat for ${finalModelName} (inference profile)`);
+        // Remove duplicate region definition - already defined above
+        // On EC2, if no explicit credentials are provided, AWS SDK will automatically
+        // use the IAM Role attached to the EC2 instance (via instance metadata service)
+        // This is more secure than using access keys
+        const hasExplicitCredentials = process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY;
+        const credentials = hasExplicitCredentials ? {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+        } : undefined;
+        
+        if (!hasExplicitCredentials) {
+            logger.info(`No explicit AWS credentials found. Will use IAM Role if running on EC2, or default AWS credential chain.`);
+        }
+        
+        // Check for Bearer Token authentication (alternative to IAM Role)
+        const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK;
+        
+        const bedrockConfig: any = {
+            model: finalModelName,
+            region: region,
+            maxTokens: (modelOptions as any).maxTokens,
+            temperature: (modelOptions as any).temperature,
+        };
+        
+        if (bearerToken) {
+            // Use bearer token authentication with custom fetch function
+            logger.info(`Using Bearer Token authentication for Bedrock`);
+            // Create custom fetch function that adds bearer token to requests
+            bedrockConfig.customFetchFunction = async (url: string, init?: RequestInit): Promise<Response> => {
+                const headers = new Headers(init?.headers);
+                headers.set('Authorization', `Bearer ${bearerToken}`);
+                // Remove AWS signature headers if present
+                headers.delete('X-Amz-Security-Token');
+                headers.delete('X-Amz-Date');
+                headers.delete('X-Amz-Signature');
+                
+                return fetch(url, {
+                    ...init,
+                    headers: headers,
+                });
+            };
+            // Don't use IAM credentials with bearer token
+            bedrockConfig.credentials = undefined;
+        } else if (credentials) {
+            bedrockConfig.credentials = credentials;
+        }
+        // If neither bearer token nor explicit credentials, BedrockChat will use IAM Role automatically
+        
+        initializedModel = new BedrockChat(bedrockConfig);
+    } else if (provider === "anthropic") {
+        // [CRITICAL FIX] Use ChatAnthropic directly to avoid initChatModel default logic
+        // which incorrectly sets top_p: -1 for temperature: 0
         logger.info(`Using ChatAnthropic direct instantiation for ${correctedModelName}`);
         initializedModel = new ChatAnthropic({
             modelName: correctedModelName,
@@ -321,6 +410,13 @@ export class ModelManager {
 
     // Always add the base configuration as the primary model
     // This represents what is configured in GraphConfig or env vars
+    configs.push(baseConfig);
+    
+    // [RETRY LOGIC] Add the SAME model as fallback for retries.
+    // This allows FallbackRunnable to retry execution with the exact same model configuration
+    // in case of transient errors (timeouts, server errors) without switching providers.
+    // We add it 2 more times for a total of 3 attempts.
+    configs.push(baseConfig);
     configs.push(baseConfig);
 
     /*
@@ -426,7 +522,26 @@ export class ModelManager {
     };
 
     const taskConfig = taskMap[task];
-    const modelStr = taskConfig.modelName;
+    let modelStr = taskConfig.modelName;
+    
+    // [BEDROCK FIX] Replace old Claude 4.5 models that require inference profiles
+    // with Claude 3.5 models that support on-demand directly
+    if (modelStr.includes("bedrock:")) {
+      const oldToNewMappings: Record<string, string> = {
+        "bedrock:anthropic.claude-haiku-4-5-20251001-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock:anthropic.claude-opus-4-5-20251101-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock:us.anthropic.claude-opus-4-5-20251101-v1:0": "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+      };
+      
+      if (oldToNewMappings[modelStr]) {
+        logger.warn(`[${task.toUpperCase()}] Replacing unsupported Bedrock model ${modelStr} with ${oldToNewMappings[modelStr]}`);
+        modelStr = oldToNewMappings[modelStr];
+      }
+    }
+    
     const [modelProvider, ...modelNameParts] = modelStr.split(":");
 
     let thinkingModel = false;
@@ -523,6 +638,13 @@ export class ModelManager {
         [LLMTask.ROUTER]: "gemini-2.5-flash",
         [LLMTask.SUMMARIZER]: "gemini-2.5-pro",
       },
+      bedrock: {
+        [LLMTask.PLANNER]: "anthropic.claude-3-5-haiku-20241022-v1:0",
+        [LLMTask.PROGRAMMER]: "anthropic.claude-3-5-haiku-20241022-v1:0",
+        [LLMTask.REVIEWER]: "anthropic.claude-3-5-haiku-20241022-v1:0",
+        [LLMTask.ROUTER]: "anthropic.claude-3-5-haiku-20241022-v1:0",
+        [LLMTask.SUMMARIZER]: "anthropic.claude-3-5-haiku-20241022-v1:0",
+      },
       openai: {
         [LLMTask.PLANNER]: "gpt-5-codex",
         [LLMTask.PROGRAMMER]: "gpt-5-codex",
@@ -599,9 +721,9 @@ export class ModelManager {
     const key = this.getCircuitBreakerKey(modelKey);
     
     if (redisStore) {
-      const state = await redisStore.getJSON<CircuitBreakerState>(key);
-      if (state) {
-        return state;
+    const state = await redisStore.getJSON<CircuitBreakerState>(key);
+    if (state) {
+      return state;
       }
     }
 
@@ -613,7 +735,7 @@ export class ModelManager {
     };
     // Try to save, but don't fail if Redis is unavailable
     if (redisStore) {
-      await this.saveCircuitState(modelKey, defaultState);
+    await this.saveCircuitState(modelKey, defaultState);
     }
     return defaultState;
   }

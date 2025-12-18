@@ -13,10 +13,11 @@ import {
   takeActions,
   determineNeedsContext,
 } from "./nodes/index.js";
-import { isAIMessage } from "@langchain/core/messages";
+import { isAIMessage, isHumanMessage } from "@langchain/core/messages";
 import { initializeSandbox } from "../shared/initialize-sandbox.js";
 import { diagnoseError } from "../shared/diagnose-error.js";
 import { handleModelFallback } from "../shared/handle-model-fallback.js";
+import { checkpointer } from "../../utils/postgres-checkpointer.js";
 
 function takeActionOrGeneratePlan(
   state: PlannerGraphState,
@@ -25,7 +26,7 @@ function takeActionOrGeneratePlan(
   const lastMessage = messages[messages.length - 1];
   
   // Check if the last message is a model selection response (after interrupt)
-  if (lastMessage.role === "human") {
+  if (isHumanMessage(lastMessage)) {
     const content = typeof lastMessage.content === "string" 
       ? lastMessage.content 
       : Array.isArray(lastMessage.content)
@@ -87,5 +88,5 @@ const workflow = new StateGraph(PlannerGraphStateObj, GraphConfiguration)
   .addEdge("notetaker", "interrupt-proposed-plan")
   .addEdge("handle-model-fallback", "generate-plan-context-action");
 
-export const graph = workflow.compile();
+export const graph = workflow.compile({ checkpointer });
 graph.name = "Open SWE - Planner";

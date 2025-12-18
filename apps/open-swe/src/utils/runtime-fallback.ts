@@ -1,3 +1,4 @@
+import * as fs from 'fs/promises';
 import { GraphConfig } from "@openswe/shared/open-swe/types";
 import { LLMTask } from "@openswe/shared/open-swe/llm-task";
 import { ModelManager, Provider, ModelLoadConfig } from "./llms/model-manager.js";
@@ -12,6 +13,8 @@ import {
   AIMessageChunk,
   BaseMessage,
   BaseMessageLike,
+  isAIMessage,
+  ToolMessage,
 } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration } from "@langchain/core/outputs";
 import { BaseLanguageModelInput } from "@langchain/core/language_models/base";
@@ -37,6 +40,85 @@ function useProviderMessages(
     return initialInput;
   }
   return providerMessages[provider];
+}
+
+// Helper to check if message is AI message (robust to serialization)
+function isAIMessageLike(message: any): boolean {
+  if (!message) return false;
+  
+  // Prioritize safe property checks for plain objects
+  if (message.role === 'assistant' || message.type === 'ai') return true;
+  if (message.constructor && message.constructor.name === 'AIMessage') return true;
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+
+  // Only use LangChain helper if object has the required method
+  // isAIMessage internally calls _getType(), which crashes on plain objects
+  if (typeof message._getType === 'function') {
+      try {
+          return isAIMessage(message);
+      } catch (e) {
+          return false;
+      }
+  }
+  
+  return false;
+}
+
+// Helper to check if message is Tool message (robust to serialization)
+function isToolMessageLike(message: any): boolean {
+  if (!message) return false;
+  if (message instanceof ToolMessage) return true;
+  return message.role === 'tool' || message.type === 'tool';
+}
+
+// Helper to sanitize message history and fix dangling tool calls
+function sanitizeHistory(input: BaseLanguageModelInput): BaseLanguageModelInput {
+  if (!Array.isArray(input)) {
+    return input;
+  }
+
+  const sanitizedMessages: BaseMessageLike[] = [];
+  const messages = input as any[]; // Treat as any to handle mixed types
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    sanitizedMessages.push(message);
+
+    // Robust check for AI message with tool calls
+    if (isAIMessageLike(message) && message.tool_calls && message.tool_calls.length > 0) {
+      // Check if the next message is a corresponding tool result
+      const nextMessage = messages[i + 1];
+      
+      const missingNextMessage = !nextMessage;
+      const nextMessageIsNotTool = nextMessage && !isToolMessageLike(nextMessage);
+      
+      if (missingNextMessage || nextMessageIsNotTool) {
+         // Create dummy tool results for ALL tool calls in this message
+         message.tool_calls.forEach((toolCall: any) => {
+             // Avoid duplicating if next message IS a tool message but for a different tool call (very rare edge case)
+             // But for safety, if the next message is NOT a tool message, we definitely need to inject.
+             
+             logger.warn(`Injecting dummy tool result for dangling tool call: ${toolCall.name} (${toolCall.id}). Next message exists: ${!!nextMessage}, Is Tool: ${nextMessage ? isToolMessageLike(nextMessage) : 'N/A'}`);
+             
+             sanitizedMessages.push(new ToolMessage({
+                 tool_call_id: toolCall.id!,
+                 content: "Error: Tool execution interrupted or result missing. Please retry.",
+                 name: toolCall.name
+             }));
+         });
+      } else {
+        // Next message IS a tool message. 
+        // We should verify if ALL tool calls in the AI message are covered.
+        // Anthropic requires strict ordering and completeness.
+        // If there are multiple tool calls, there must be multiple tool messages following.
+        
+        // This is complex to check perfectly in a linear pass without lookahead, 
+        // but let's at least check the first one or ensure we don't have "orphan" calls.
+        // For now, the primary failure mode is a complete missing block, which the above 'if' handles.
+      }
+    }
+  }
+  return sanitizedMessages;
 }
 
 export class FallbackRunnable<
@@ -94,6 +176,9 @@ export class FallbackRunnable<
     input: BaseLanguageModelInput,
     options?: Record<string, any>,
   ): Promise<AIMessageChunk> {
+    // Sanitize input history to fix dangling tool calls
+    const sanitizedInput = sanitizeHistory(input);
+
     // Check if primaryRunnable has top_p: -1 in its config
     const primaryModel = this.getPrimaryModel();
     const primaryConfig = (primaryModel as any)?._defaultConfig;
@@ -234,8 +319,21 @@ export class FallbackRunnable<
           // Wrap the runnable to ensure options are clean
           const originalInvoke = runnableToUse.invoke.bind(runnableToUse);
           runnableToUse.invoke = async (input: any, invokeOptions?: any) => {
+            
+            // --- DEBUG PROMPT SIZE ---
+            try {
+                const fullInput = useProviderMessages(input, this.providerMessages, modelConfig.provider);
+                const inputStr = JSON.stringify(fullInput, null, 2);
+                await fs.writeFile('/home/ubuntu/last_prompt_debug.txt', inputStr);
+                logger.info(`[DEBUG] Saved prompt to /home/ubuntu/last_prompt_debug.txt (Size: ${inputStr.length} chars)`);
+            } catch (err) {
+                logger.error("[DEBUG] Failed to save prompt debug file", err);
+            }
+            // -------------------------
+
             // Ensure top_p is REMOVED from options
             let cleanOptions = invokeOptions || {};
+
             
             // [CRITICAL FIX] Enforce top_p=0 and remove temperature for Anthropic
             // If top_p is missing or invalid, set it to 0.
@@ -322,7 +420,7 @@ export class FallbackRunnable<
 
         const result = await runnableToUse.invoke(
           useProviderMessages(
-            input,
+            sanitizedInput, // Use sanitized input
             this.providerMessages,
             modelConfig.provider,
           ),
@@ -363,81 +461,14 @@ export class FallbackRunnable<
           );
         }
         
-        /*
-        // If it's the primary model (i === 0) and it's a recoverable error (rate limit, timeout, etc.)
-        // OR a configuration error, ask the user to choose a fallback model
-        // Don't try fallback models automatically - let the user choose
-        if (i === 0) {
-          const remainingModels = modelConfigs.slice(1).filter((config, idx) => {
-            const key = `${config.provider}:${config.modelName}`;
-            // Filter out models with open circuit breakers
-            return true; // We'll check circuit breakers when user selects
-          });
-          
-          // Always ask user if it's a recoverable error (not auth error) - this includes API errors like "overloaded_error", "Internal server error", etc.
-          // Also ask if it's a config error
-          const isRecoverableError = !isAuthError;
-          
-          // Always ask user for recoverable errors, even if there are no fallback models configured
-          // The user might want to manually select a different model
-          if (isRecoverableError || isConfigError) {
-            const errorType = isConfigError ? "configuración" : "recuperable";
-            logger.warn(
-              `Primary model ${modelKey} failed with ${errorType} error: ${errorMessage}. Asking user to choose fallback model.`,
-            );
-            await this.modelManager.recordFailure(modelKey);
-            
-            // Get all available models from all providers as fallback options
-            // This gives the user more options even if no fallback models are configured
-            const allAvailableModels = remainingModels.length > 0 
-              ? remainingModels 
-              : this.modelManager.getAllAvailableModels(this.task, modelConfig.provider);
-            
-            // Throw special error that will be caught to interrupt and ask user
-            throw new ModelFallbackInterruptError(
-              modelKey,
-              modelConfig,
-              errorMessage,
-              allAvailableModels,
-              this.task,
-            );
-          }
+        // If there are more models/retries configured and it's a recoverable error (timeout, server error), continue
+        if (!isConfigError && i < modelConfigs.length - 1) {
+             logger.warn(`${modelKey} failed with recoverable error: ${errorMessage}. Retrying with next configuration...`);
+             await this.modelManager.recordFailure(modelKey);
+             continue; // Try next model/retry in list
         }
-        
-        logger.warn(
-          `${modelKey} failed: ${errorMessage}`,
-        );
-        await this.modelManager.recordFailure(modelKey);
-        
-        // If this is a fallback model (i > 0) and it failed with a recoverable error,
-        // ask user to choose another model instead of trying all remaining models automatically
-        if (i > 0) {
-          const remainingModels = modelConfigs.slice(i + 1).filter((config, idx) => {
-            const key = `${config.provider}:${config.modelName}`;
-            return true; // We'll check circuit breakers when user selects
-          });
-          
-          // Check if it's a recoverable error (not auth or config error)
-          const isRecoverableError = !isAuthError && !isConfigError;
-          
-          if (isRecoverableError && remainingModels.length > 0) {
-            logger.warn(
-              `Fallback model ${modelKey} failed: ${errorMessage}. Asking user to choose another model.`,
-            );
-            
-            // Throw special error that will be caught to interrupt and ask user
-            throw new ModelFallbackInterruptError(
-              modelKey,
-              modelConfig,
-              errorMessage,
-              remainingModels,
-              this.task,
-            );
-          }
-        }
-        */
        
-       // Just throw the error immediately to see what happened with the primary model
+       // Just throw the error immediately if we can't retry
        logger.error(`Model ${modelKey} failed: ${errorMessage}`);
        // Log full error details
        console.error("FULL ERROR DETAILS:", error);

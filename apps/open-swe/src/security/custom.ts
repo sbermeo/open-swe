@@ -42,8 +42,8 @@ async function getAllowedTokenHashes(): Promise<string[]> {
     }
   } catch (error) {
     // Redis unavailable, fallback to in-memory cache
-    if (cachedAllowedTokenHashes) {
-      return cachedAllowedTokenHashes;
+  if (cachedAllowedTokenHashes) {
+    return cachedAllowedTokenHashes;
     }
   }
 

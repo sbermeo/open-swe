@@ -90,6 +90,7 @@ export async function handleCompletedTask(
   );
   // Update the github issue to reflect this task as completed.
   if (!isLocalMode(config) && shouldCreateIssue(config)) {
+    try {
     await addTaskPlanToIssue(
       {
         githubIssueId: state.githubIssueId,
@@ -98,6 +99,12 @@ export async function handleCompletedTask(
       config,
       updatedPlanTasks,
     );
+    } catch (error) {
+      logger.warn(
+        "Failed to update GitHub issue with task plan. Continuing execution.",
+        { error },
+      );
+    }
   } else {
     logger.info("Skipping GitHub issue update in local mode");
   }

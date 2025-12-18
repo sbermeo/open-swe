@@ -65,6 +65,13 @@ const PROVIDER_MODEL_MAPPINGS: Record<string, Record<string, string>> = {
     routerModelName: "openai:gpt-5-nano",
     summarizerModelName: "openai:gpt-5-mini",
   },
+  bedrock: {
+    plannerModelName: "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+    programmerModelName: "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+    reviewerModelName: "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+    routerModelName: "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+    summarizerModelName: "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0",
+  },
 };
 
 function OpenSettingsButton() {
@@ -313,6 +320,7 @@ export function DefaultView({ threads, threadsLoading }: DefaultViewProps) {
                         <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                         <SelectItem value="openai">OpenAI</SelectItem>
                         <SelectItem value="google-genai">Google GenAI (Gemini)</SelectItem>
+                        <SelectItem value="bedrock">Amazon Bedrock (Claude)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
